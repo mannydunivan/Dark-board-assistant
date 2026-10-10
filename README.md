@@ -23,6 +23,24 @@ Open http://localhost:3000 (or whatever `PORT` is set to).
 The server proxies api.scryfall.com for card search, printings, and prices, so
 the browser never talks to Scryfall directly.
 
+## Multiple decks & deck value (v2.3)
+
+The Deck tab now holds **several decks at once**: use the "Choose a deck"
+menu to switch, and the **New deck**, **Rename**, and **Delete** buttons to
+manage them (deleting asks for a confirming second tap). Each deck keeps its
+own name, format, cards, and check-offs.
+
+- Logged out: decks save in the browser (`dba-decks` in localStorage). The
+  very first run migrates the old single-deck save automatically — nothing is
+  lost.
+- Logged in: each deck is stored on the account (one server deck per deck),
+  so the whole collection follows you across devices.
+
+The Deck tab also shows a **market price total** under the format checks:
+"Deck value: $X.XX", counting every copy. Cards with no listed price are
+noted separately (e.g. "2 cards have no listed price"). The total is
+included when you copy or share the deck list.
+
 ## Accounts (v2.0, optional)
 
 Set these two environment variables to turn on email/password accounts.
