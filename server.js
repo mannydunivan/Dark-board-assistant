@@ -8,6 +8,7 @@
 // each visitor's own browser and the account UI shows a short notice.
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 
 const app = express();
@@ -16,7 +17,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
-const VERSION = '2.1';
+const VERSION = '2.2';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -401,6 +402,25 @@ app.get('/api/theme', async (req, res) => {
 app.get('/manifest.webmanifest', (_req, res) => {
   res.type('application/manifest+json');
   res.sendFile(path.join(__dirname, 'public', 'manifest.webmanifest'));
+});
+
+// App icons are stored in the repo as base64 text files (so they survive
+// text-only file sync); decode them once at boot and serve as real PNGs.
+const ICONS = {};
+for (const name of ['icon-512.png', 'icon-192.png', 'apple-touch-icon.png']) {
+  try {
+    ICONS[name] = Buffer.from(
+      fs.readFileSync(path.join(__dirname, 'public', 'icons', name + '.b64'), 'utf8').trim(),
+      'base64'
+    );
+  } catch (e) {
+    console.error('Icon missing: ' + name);
+  }
+}
+app.get('/icons/:name', (req, res) => {
+  const buf = ICONS[req.params.name];
+  if (!buf) return res.status(404).end();
+  res.type('image/png').send(buf);
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
