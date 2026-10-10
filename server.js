@@ -1,13 +1,134 @@
-// The Dark Board Assistant — server
+// The Dark Board Assistant — server (v2.0)
 // Serves the single-page frontend and proxies api.scryfall.com so the
 // browser never hits Scryfall rate limits directly. Simple in-memory cache
 // keeps repeat queries fast and polite to the Scryfall API.
+//
+// v2.0 adds optional email/password accounts (Postgres via DATABASE_URL).
+// When DATABASE_URL is unset the app runs exactly as before: decks save in
+// each visitor's own browser and the account UI shows a short notice.
 const express = require('express');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
+app.set('trust proxy', 1); // Render terminates TLS at its proxy
+app.use(express.json({ limit: '1mb' }));
+
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
+const VERSION = '2.0';
+
+const DATABASE_URL = process.env.DATABASE_URL || '';
+const SESSION_SECRET = process.env.SESSION_SECRET || '';
+const COOKIE_NAME = 'dba_session';
+
+// ---- optional Postgres (accounts) ----
+let pool = null;
+let accountsOn = false;
+
+function makePool() {
+  const { Pool } = require('pg');
+  // Local dev databases usually have no TLS; hosted ones (Neon, Render) do.
+  const local = /localhost|127\.0\.0\.1/.test(DATABASE_URL);
+  return new Pool({
+    connectionString: DATABASE_URL,
+    ssl: local ? undefined : { rejectUnauthorized: false },
+    connectionTimeoutMillis: 8000,
+  });
+}
+
+async function initDb() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users(
+      id uuid PRIMARY KEY,
+      email text UNIQUE NOT NULL,
+      password_hash text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS decks(
+      id uuid PRIMARY KEY,
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name text NOT NULL,
+      format text NOT NULL,
+      cards jsonb NOT NULL DEFAULT '[]',
+      checks jsonb NOT NULL DEFAULT '{}',
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS decks_user_id_idx ON decks(user_id);
+  `);
+}
+
+// ---- tiny cookie helper (no extra dependency) ----
+function getCookie(req, name) {
+  const h = req.headers.cookie || '';
+  const m = h.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function cookieFlags(req) {
+  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  return { httpOnly: true, sameSite: 'lax', secure: !!secure, path: '/' };
+}
+function setSession(res, req, userId) {
+  const jwt = require('jsonwebtoken');
+  const token = jwt.sign({ uid: userId }, SESSION_SECRET, { expiresIn: '30d' });
+  res.cookie(COOKIE_NAME, token, Object.assign(cookieFlags(req), {
+    maxAge: 30 * 24 * 3600 * 1000,
+  }));
+}
+function clearSession(res, req) {
+  res.clearCookie(COOKIE_NAME, cookieFlags(req));
+}
+function authUserId(req) {
+  const token = getCookie(req, COOKIE_NAME);
+  if (!token) return null;
+  try {
+    const jwt = require('jsonwebtoken');
+    return jwt.verify(token, SESSION_SECRET).uid || null;
+  } catch (e) {
+    return null;
+  }
+}
+function requireAuth(req, res, next) {
+  if (!accountsOn || !pool) {
+    return res.status(503).json({ error: 'Accounts are turned off on this site right now.' });
+  }
+  const uid = authUserId(req);
+  if (!uid) return res.status(401).json({ error: 'You need to log in first.' });
+  req.userId = uid;
+  next();
+}
+
+// ---- validation helpers ----
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function cleanEmail(v) {
+  return String(v || '').trim().toLowerCase().slice(0, 254);
+}
+function validEmail(e) { return EMAIL_RE.test(e); }
+const FORMATS = ['commander', 'standard', 'modern'];
+function cleanCard(c) {
+  if (!c || typeof c !== 'object') return null;
+  const n = parseInt(c.count, 10);
+  return {
+    pid: String(c.pid || '').slice(0, 120),
+    name: String(c.name || 'Unknown card').slice(0, 200),
+    set: String(c.set || '').slice(0, 20),
+    cn: String(c.cn || '').slice(0, 30),
+    price: String(c.price || '').slice(0, 20),
+    img: String(c.img || '').slice(0, 2000),
+    count: Math.max(1, Math.min(99, isNaN(n) ? 1 : n)),
+    checked: !!c.checked,
+    commander: !!c.commander,
+  };
+}
+function cleanDeckBody(body) {
+  const b = body || {};
+  const name = String(b.name || 'My deck').trim().slice(0, 120) || 'My deck';
+  const format = FORMATS.includes(b.format) ? b.format : 'commander';
+  const cardsRaw = Array.isArray(b.cards) ? b.cards.slice(0, 500) : [];
+  const cards = cardsRaw.map(cleanCard).filter(Boolean);
+  const checks = b.checks && typeof b.checks === 'object' ? b.checks : {};
+  return { name, format, cards, checks };
+}
 
 // ---- polite Scryfall client: tiny throttle + short-lived cache ----
 const cache = new Map();
@@ -22,7 +143,7 @@ async function scryfallFetch(url) {
   if (wait) await new Promise((r) => setTimeout(r, wait));
   lastCall = Date.now();
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/1.4 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.0 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('Scryfall returned ' + res.status);
@@ -67,7 +188,157 @@ const THEMES = {
 };
 
 app.get('/healthz', (_req, res) => res.send('ok'));
+app.get('/api/status', (_req, res) => res.json({ accounts: accountsOn, version: VERSION }));
 
+// ---- auth (rate-limited) ----
+const rateLimit = require('express-rate-limit');
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many tries. Please wait a few minutes and try again.' },
+});
+
+app.post('/api/auth/signup', authLimiter, async (req, res) => {
+  if (!accountsOn || !pool) {
+    return res.status(503).json({ error: 'Accounts are turned off on this site right now.' });
+  }
+  const email = cleanEmail(req.body && req.body.email);
+  const password = String((req.body && req.body.password) || '');
+  if (!validEmail(email)) {
+    return res.status(400).json({ error: 'That email does not look right. Please check it and try again.' });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Your password needs to be at least 8 characters long.' });
+  }
+  if (password.length > 128) {
+    return res.status(400).json({ error: 'That password is too long. Please use 128 characters or fewer.' });
+  }
+  try {
+    const bcrypt = require('bcryptjs');
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existing.rowCount > 0) {
+      return res.status(409).json({ error: 'This email already has an account. Try logging in instead.' });
+    }
+    const hash = await bcrypt.hash(password, 12);
+    const id = crypto.randomUUID();
+    await pool.query('INSERT INTO users(id, email, password_hash) VALUES($1, $2, $3)', [id, email, hash]);
+    setSession(res, req, id);
+    res.json({ id, email });
+  } catch (e) {
+    console.error('signup failed:', e.message);
+    res.status(500).json({ error: 'Something went wrong. Please try again in a moment.' });
+  }
+});
+
+app.post('/api/auth/login', authLimiter, async (req, res) => {
+  if (!accountsOn || !pool) {
+    return res.status(503).json({ error: 'Accounts are turned off on this site right now.' });
+  }
+  const email = cleanEmail(req.body && req.body.email);
+  const password = String((req.body && req.body.password) || '');
+  try {
+    const bcrypt = require('bcryptjs');
+    const r = await pool.query('SELECT id, password_hash FROM users WHERE email = $1', [email]);
+    if (r.rowCount === 0) {
+      return res.status(401).json({ error: 'That email or password is wrong. Please try again.' });
+    }
+    const ok = await bcrypt.compare(password, r.rows[0].password_hash);
+    if (!ok) {
+      return res.status(401).json({ error: 'That email or password is wrong. Please try again.' });
+    }
+    setSession(res, req, r.rows[0].id);
+    res.json({ id: r.rows[0].id, email });
+  } catch (e) {
+    console.error('login failed:', e.message);
+    res.status(500).json({ error: 'Something went wrong. Please try again in a moment.' });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  clearSession(res, req);
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  if (!accountsOn || !pool) return res.status(401).json({ error: 'Not logged in.' });
+  const uid = authUserId(req);
+  if (!uid) return res.status(401).json({ error: 'Not logged in.' });
+  pool.query('SELECT id, email FROM users WHERE id = $1', [uid])
+    .then((r) => {
+      if (r.rowCount === 0) return res.status(401).json({ error: 'Not logged in.' });
+      res.json({ id: r.rows[0].id, email: r.rows[0].email });
+    })
+    .catch(() => res.status(500).json({ error: 'Something went wrong. Please try again in a moment.' }));
+});
+
+// ---- per-account decks (auth required, user-scoped) ----
+app.get('/api/decks', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT id, name, format, updated_at FROM decks WHERE user_id = $1 ORDER BY updated_at DESC',
+      [req.userId]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: 'Could not load your decks right now.' });
+  }
+});
+
+app.get('/api/decks/:id', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT id, name, format, cards, checks, updated_at FROM decks WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.userId]
+    );
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Deck not found.' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'Could not load your deck right now.' });
+  }
+});
+
+app.post('/api/decks', requireAuth, async (req, res) => {
+  const d = cleanDeckBody(req.body);
+  try {
+    const id = crypto.randomUUID();
+    const r = await pool.query(
+      'INSERT INTO decks(id, user_id, name, format, cards, checks) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb) RETURNING id, name, format, updated_at',
+      [id, req.userId, d.name, d.format, JSON.stringify(d.cards), JSON.stringify(d.checks)]
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'Could not save your deck right now.' });
+  }
+});
+
+app.put('/api/decks/:id', requireAuth, async (req, res) => {
+  const d = cleanDeckBody(req.body);
+  try {
+    const r = await pool.query(
+      `UPDATE decks SET name=$1, format=$2, cards=$3::jsonb, checks=$4::jsonb, updated_at=now()
+       WHERE id=$5 AND user_id=$6 RETURNING id, name, format, updated_at`,
+      [d.name, d.format, JSON.stringify(d.cards), JSON.stringify(d.checks), req.params.id, req.userId]
+    );
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Deck not found.' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: 'Could not save your deck right now.' });
+  }
+});
+
+app.delete('/api/decks/:id', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query('DELETE FROM decks WHERE id=$1 AND user_id=$2', [req.params.id, req.userId]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Deck not found.' });
+    res.status(204).end();
+  } catch (e) {
+    res.status(500).json({ error: 'Could not delete your deck right now.' });
+  }
+});
+
+// ---- card data (unchanged from v1.x) ----
 app.get('/api/search', scryfallProxy('/cards/search'));
 app.get('/api/autocomplete', scryfallProxy('/cards/autocomplete'));
 app.get('/api/named', scryfallProxy('/cards/named'));
@@ -128,6 +399,31 @@ app.get('/api/theme', async (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.listen(PORT, () => {
-  console.log('The Dark Board Assistant listening on port ' + PORT);
-});
+// ---- boot ----
+(async () => {
+  if (DATABASE_URL) {
+    if (!SESSION_SECRET) {
+      console.error(
+        'FATAL: DATABASE_URL is set but SESSION_SECRET is missing.\n' +
+        'Set SESSION_SECRET to a long random value (generate one with: openssl rand -hex 32).'
+      );
+      process.exit(1);
+    }
+    try {
+      pool = makePool();
+      pool.on('error', (e) => console.error('Postgres pool error:', e.message));
+      await initDb();
+      accountsOn = true;
+      console.log('Accounts are on: users can sign up, log in, and save decks to their account.');
+    } catch (e) {
+      pool = null;
+      accountsOn = false;
+      console.error('Database unavailable (' + e.message + ') — running without accounts.');
+    }
+  } else {
+    console.log('DATABASE_URL is not set — running without accounts. Decks save in this browser only.');
+  }
+  app.listen(PORT, () => {
+    console.log('The Dark Board Assistant v' + VERSION + ' listening on port ' + PORT);
+  });
+})();
