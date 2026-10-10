@@ -52,10 +52,59 @@ function backfillCard(c) {
   c = c || {};
   if (c.priceNum === undefined) c.priceNum = parsePriceNum(c.price);
   if (typeof c.priceNum !== 'number' || !isFinite(c.priceNum)) c.priceNum = null;
+  c.cmc = (typeof c.cmc === 'number' && isFinite(c.cmc) && c.cmc >= 0) ? c.cmc : null;
+  c.colors = Array.isArray(c.colors) ? c.colors.filter((x) => /^[WUBRG]$/.test(x)) : [];
+  c.maintype = typeof c.maintype === 'string' ? c.maintype : '';
+  c.power = (c.power === null || c.power === undefined) ? null : String(c.power);
+  c.toughness = (c.toughness === null || c.toughness === undefined) ? null : String(c.toughness);
+  c.subtypes = Array.isArray(c.subtypes) ? c.subtypes.filter((x) => typeof x === 'string') : [];
+  c.keywords = Array.isArray(c.keywords) ? c.keywords.filter((x) => typeof x === 'string') : [];
   c.count = Number(c.count) > 0 ? Math.floor(Number(c.count)) : 1;
   c.checked = !!c.checked;
   c.commander = !!c.commander;
   return c;
+}
+
+// The main card type word from a Scryfall type line, e.g.
+// "Legendary Creature — Dragon" -> "Creature". Used by the deck stats charts.
+const STAT_TYPES = ['Creature', 'Instant', 'Sorcery', 'Artifact', 'Enchantment', 'Planeswalker', 'Land', 'Battle'];
+function mainTypeOf(card) {
+  const faces = card.card_faces || [];
+  const line = card.type_line || (faces[0] && faces[0].type_line) || '';
+  const before = line.split(/[—–-]/)[0].trim();
+  const words = before.split(/\s+/).filter(Boolean);
+  const last = words.length ? words[words.length - 1] : '';
+  const word = last.charAt(0).toUpperCase() + last.slice(1).toLowerCase();
+  return STAT_TYPES.includes(word) ? word : 'Other';
+}
+
+// The small stat fields the deck-stats charts need, taken from a Scryfall
+// card object (face 0 for double-faced cards when the top level is missing).
+function statFieldsOf(card) {
+  const face = (card.card_faces && card.card_faces[0]) || {};
+  const cmc = (typeof card.cmc === 'number' && isFinite(card.cmc)) ? card.cmc
+    : ((typeof face.cmc === 'number' && isFinite(face.cmc)) ? face.cmc : null);
+  const colors = Array.isArray(card.colors) ? card.colors
+    : (Array.isArray(face.colors) ? face.colors : []);
+  const typeLine = card.type_line || face.type_line || '';
+  const after = typeLine.split(/[—–]/)[1] || '';
+  const subtypes = after.trim().split(/\s+/).filter(Boolean);
+  const power = (card.power !== undefined && card.power !== null) ? String(card.power)
+    : ((face.power !== undefined && face.power !== null) ? String(face.power) : null);
+  const toughness = (card.toughness !== undefined && card.toughness !== null) ? String(card.toughness)
+    : ((face.toughness !== undefined && face.toughness !== null) ? String(face.toughness) : null);
+  const keywords = Array.isArray(card.keywords) ? card.keywords
+    : (Array.isArray(face.keywords) ? face.keywords : []);
+  return {
+    cmc: cmc,
+    colors: colors.filter((c) => /^[WUBRG]$/.test(c)),
+    maintype: mainTypeOf(card),
+    power: power,
+    toughness: toughness,
+    subtypes: subtypes,
+    keywords: keywords.filter((k) => typeof k === 'string'),
+    statsOk: true,
+  };
 }
 function blankDeck(name) {
   return { id: newId(), name: name || 'New deck', format: 'commander', cards: [] };
@@ -488,13 +537,559 @@ function deckValueLine() {
   return s;
 }
 
+function deckValueLine() {
+  if (!deck.cards.length) return '';
+  const priced = deck.cards.some((c) => typeof c.priceNum === 'number' && isFinite(c.priceNum));
+  if (!priced) return 'Deck value: — (no prices listed)';
+  const v = deckValue();
+  let s = 'Deck value: $' + v.total.toFixed(2);
+  if (v.missing > 0) s += ' · ' + v.missing + (v.missing === 1 ? ' card has' : ' cards have') + ' no listed price';
+  return s;
+}
+
+// ---------- deck stats (v2.4): charts + coaching ----------
+// Entries added from search carry cmc/colors/maintype/power/toughness/
+// subtypes/keywords/statsOk (see statFieldsOf). Older entries get them from
+// the one-time per-deck backfill below (POST /api/cards/collection).
+const statsBackfillTried = {};
+const statsBackfillBusy = {};
+
+function statCopies(c) { return c.count > 0 ? Math.floor(c.count) : 1; }
+
+function topEntries(obj, n) {
+  return Object.keys(obj).map((k) => ({ name: k, n: obj[k] }))
+    .sort((a, b) => b.n - a.n || (a.name < b.name ? -1 : 1)).slice(0, n);
+}
+
+function nameList(names) {
+  const e = names.map(esc);
+  if (e.length <= 1) return e.join('');
+  if (e.length === 2) return e[0] + ' and ' + e[1];
+  return e.slice(0, -1).join(', ') + ', and ' + e[e.length - 1];
+}
+
+function plural(word) {
+  const irr = { Elf: 'Elves', Dwarf: 'Dwarves', Wolf: 'Wolves', Faerie: 'Faeries' };
+  if (irr[word]) return irr[word];
+  if (/s$|x$|ch$|sh$/i.test(word)) return word + 'es';
+  return word + 's';
+}
+
+function cap1(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+const COLOR_NAMES = { W: 'white', U: 'blue', B: 'black', R: 'red', G: 'green' };
+
+function computeStats(cards) {
+  const ok = cards.filter((c) => c.statsOk);
+  const total = cards.reduce((n, c) => n + statCopies(c), 0);
+  const missing = cards.reduce((n, c) => n + (c.statsOk ? 0 : statCopies(c)), 0);
+  const curve = [0, 0, 0, 0, 0, 0, 0];
+  const colors = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+  const types = {};
+  let speedSum = 0, speedN = 0, early = 0, mid = 0, late = 0;
+  let powSum = 0, powN = 0, touSum = 0, touN = 0;
+  let small = 0, medium = 0, big = 0, unknownPow = 0;
+  let creatureCopies = 0, spellCopies = 0, landCount = 0;
+  const tribes = {}, keywords = {};
+  const seenPid = {};
+  const expensive = [], priciest = [];
+  ok.forEach((c) => {
+    const n = statCopies(c);
+    if (!seenPid[c.pid]) {
+      seenPid[c.pid] = true;
+      if (typeof c.cmc === 'number') expensive.push({ name: c.name, cmc: c.cmc, n: n });
+      if (typeof c.priceNum === 'number') priciest.push({ name: c.name, price: c.priceNum, n: n });
+    }
+    const isLand = c.maintype === 'Land';
+    if (isLand) { landCount += n; }
+    else if (typeof c.cmc === 'number') {
+      curve[c.cmc >= 6 ? 6 : Math.floor(c.cmc)] += n;
+      speedSum += c.cmc * n; speedN += n;
+      if (c.cmc <= 2) early += n; else if (c.cmc <= 4) mid += n; else late += n;
+    }
+    if (c.colors && c.colors.length) {
+      c.colors.forEach((k) => { if (colors[k] !== undefined) colors[k] += n; });
+    } else { colors.C += n; }
+    const t = c.maintype || 'Other';
+    types[t] = (types[t] || 0) + n;
+    if (c.maintype === 'Creature') {
+      creatureCopies += n;
+      const p = parseFloat(c.power);
+      const tv = parseFloat(c.toughness);
+      const pKnown = c.power !== null && c.power !== undefined && c.power !== '' && isFinite(p);
+      const tKnown = c.toughness !== null && c.toughness !== undefined && c.toughness !== '' && isFinite(tv);
+      if (pKnown) {
+        powSum += p * n; powN += n;
+        if (p <= 1) small += n; else if (p <= 3) medium += n; else big += n;
+      } else { unknownPow += n; }
+      if (tKnown) { touSum += tv * n; touN += n; }
+      (c.subtypes || []).forEach((s) => { tribes[s] = (tribes[s] || 0) + n; });
+    } else if (!isLand) { spellCopies += n; }
+    (c.keywords || []).forEach((k) => { keywords[k] = (keywords[k] || 0) + n; });
+  });
+  expensive.sort((a, b) => b.cmc - a.cmc || (a.name < b.name ? -1 : 1));
+  priciest.sort((a, b) => b.price - a.price || (a.name < b.name ? -1 : 1));
+  return {
+    total: total, missing: missing,
+    curve: curve, curveTotal: curve.reduce((a, b) => a + b, 0),
+    colors: colors, types: types,
+    speed: { avg: speedN ? speedSum / speedN : null, n: speedN, early: early, mid: mid, late: late },
+    size: {
+      avgP: powN ? powSum / powN : null, avgT: touN ? touSum / touN : null,
+      small: small, medium: medium, big: big, unknown: unknownPow, creatures: creatureCopies,
+    },
+    creatureCopies: creatureCopies, spellCopies: spellCopies, landCount: landCount,
+    tribes: topEntries(tribes, 5), keywords: topEntries(keywords, 5),
+    expensive: expensive, priciest: priciest,
+  };
+}
+
+// Up to `limit` example cards of one creature subtype, most copies first.
+function tribeExamples(cards, subtype, limit) {
+  const seen = {};
+  const list = [];
+  cards.forEach((c) => {
+    if (!c.statsOk || c.maintype !== 'Creature' || seen[c.pid]) return;
+    if ((c.subtypes || []).indexOf(subtype) === -1) return;
+    seen[c.pid] = true;
+    list.push({ name: c.name, n: statCopies(c) });
+  });
+  list.sort((a, b) => b.n - a.n);
+  return list.slice(0, limit);
+}
+
+// ---------- inline SVG charts (no dependencies) ----------
+function svgOpen(w, h, label) {
+  return '<svg class="stat-svg" viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="' + esc(label) + '">';
+}
+
+function manaCurveSVG(st) {
+  const buckets = st.curve;
+  const W = 360, H = 172, top = 28, bottom = 26;
+  const max = Math.max.apply(null, buckets.concat([1]));
+  const slot = W / buckets.length, bw = Math.min(40, slot * 0.62);
+  const aria = 'Mana curve: ' + buckets.map((v, i) =>
+    v + (v === 1 ? ' card costs ' : ' cards cost ') + (i === 6 ? '6 or more' : i) + ' mana').join(', ');
+  let s = svgOpen(W, H, aria);
+  buckets.forEach((v, i) => {
+    const x = slot * i + (slot - bw) / 2;
+    const bh = (H - top - bottom) * (v / max);
+    const y = H - bottom - bh;
+    const label = i === 6 ? '6+' : String(i);
+    s += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) +
+      '" height="' + Math.max(bh, v ? 3 : 0).toFixed(1) + '" rx="4" fill="#e8a33d"/>';
+    s += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (y - 7).toFixed(1) +
+      '" text-anchor="middle" font-size="13">' + v + '</text>';
+    s += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 8) +
+      '" text-anchor="middle" font-size="12">' + label + '</text>';
+  });
+  return s + '</svg>';
+}
+
+function hbarSVG(rows, aria) {
+  const W = 360, rowH = 30, labelW = 108, valW = 36;
+  const H = rows.length * rowH + 10;
+  const max = Math.max.apply(null, rows.map((r) => r.value).concat([1]));
+  const barW = W - labelW - valW;
+  let s = svgOpen(W, H, aria);
+  rows.forEach((r, i) => {
+    const y = 8 + i * rowH;
+    const w = Math.max(r.value ? 4 : 0, barW * r.value / max);
+    s += '<text x="0" y="' + (y + 18) + '" font-size="13">' + esc(r.label) + '</text>';
+    s += '<rect x="' + labelW + '" y="' + (y + 5) + '" width="' + w.toFixed(1) +
+      '" height="16" rx="8" fill="' + r.color + '"/>';
+    s += '<text x="' + (labelW + w + 7).toFixed(1) + '" y="' + (y + 18) +
+      '" font-size="13">' + r.value + '</text>';
+  });
+  return s + '</svg>';
+}
+
+function colorsSVG(st) {
+  const rows = [
+    { label: 'White', value: st.colors.W, color: '#e8dcc0' },
+    { label: 'Blue', value: st.colors.U, color: '#5aa3e8' },
+    { label: 'Black', value: st.colors.B, color: '#8d8d9e' },
+    { label: 'Red', value: st.colors.R, color: '#e85a5a' },
+    { label: 'Green', value: st.colors.G, color: '#5ac878' },
+    { label: 'Colorless', value: st.colors.C, color: '#6e6e6e' },
+  ];
+  const aria = 'Colors: ' + rows.map((r) => r.value + ' ' + r.label.toLowerCase()).join(', ');
+  return hbarSVG(rows, aria);
+}
+
+function typesSVG(st) {
+  const order = ['Creature', 'Instant', 'Sorcery', 'Artifact', 'Enchantment', 'Planeswalker', 'Land', 'Battle', 'Other'];
+  const rows = order.map((t) => ({ label: t, value: st.types[t] || 0, color: '#e8a33d' }));
+  const aria = 'Card types: ' + rows.map((r) => r.value + ' ' + r.label.toLowerCase()).join(', ');
+  return hbarSVG(rows, aria);
+}
+
+function sizeSVG(st) {
+  const rows = [
+    { label: 'Small (0–1)', value: st.size.small, color: '#8fd18a' },
+    { label: 'Medium (2–3)', value: st.size.medium, color: '#e8a33d' },
+    { label: 'Big (4+)', value: st.size.big, color: '#e78a8a' },
+  ];
+  const aria = 'Creature sizes: ' + st.size.small + ' small, ' + st.size.medium + ' medium, ' + st.size.big + ' big';
+  return hbarSVG(rows, aria);
+}
+
+function speedBarSVG(st) {
+  const segs = [
+    { label: 'Early (0–2)', value: st.speed.early, color: '#8fd18a' },
+    { label: 'Mid (3–4)', value: st.speed.mid, color: '#e8a33d' },
+    { label: 'Late (5+)', value: st.speed.late, color: '#e78a8a' },
+  ];
+  const total = Math.max(segs[0].value + segs[1].value + segs[2].value, 1);
+  const W = 360, H = 40;
+  const aria = 'Speed split: ' + segs[0].value + ' early cards, ' + segs[1].value + ' mid cards, ' + segs[2].value + ' late cards';
+  let s = svgOpen(W, H, aria);
+  let x = 0;
+  segs.forEach((g, i) => {
+    const w = W * g.value / total;
+    s += '<rect x="' + x.toFixed(1) + '" y="8" width="' + Math.max(w, g.value ? 3 : 0).toFixed(1) +
+      '" height="24" rx="' + (i === 0 ? '6' : '0') + '" fill="' + g.color + '"/>';
+    x += w;
+  });
+  return s + '</svg>' +
+    '<p class="muted small">' + segs.map((g) =>
+      '<span class="legend-dot" style="background:' + g.color + '"></span>' + esc(g.label) + ': ' + g.value
+    ).join(' &nbsp; ') + '</p>';
+}
+
+// ---------- takeaways: plain-language reading of each chart ----------
+function manaTakeaway(st) {
+  const c = st.curve, total = st.curveTotal;
+  if (!total) return 'No cards with known mana costs yet.';
+  const early12 = c[1] + c[2];
+  const late = c[5] + c[6];
+  const out = [];
+  out.push(early12 > 0
+    ? early12 + ' of your ' + total + ' cards cost 1–2 mana, so you\'ll usually have something to play on turns 1 and 2.'
+    : 'None of your cards cost 1–2 mana — you may have nothing to play on the first turns.');
+  let peak = 0;
+  c.forEach((v, i) => { if (v > c[peak]) peak = i; });
+  const peakLabel = peak === 6 ? '6 or more' : String(peak);
+  out.push('Most of your cards cost ' + peakLabel + ' mana' +
+    (late > 0 ? ', but those ' + late + ' big cards (5+ mana) may sit in your hand during the early turns.' : '.'));
+  const big7 = st.expensive.filter((e) => e.cmc >= 7);
+  const big7n = big7.reduce((n, e) => n + e.n, 0);
+  if (big7.length) {
+    out.push('Your most expensive cards are ' +
+      nameList(big7.slice(0, 3).map((e) => e.name + ' (' + e.cmc + ')')) +
+      ' — ' + big7n + ' of your ' + st.total + ' cards cost 7 or more.');
+  }
+  return out.join(' ');
+}
+
+function colorsTakeaway(st) {
+  const order = ['W', 'U', 'B', 'R', 'G'].filter((k) => st.colors[k] > 0)
+    .sort((a, b) => st.colors[b] - st.colors[a]);
+  if (!order.length) return st.colors.C ? 'All ' + st.colors.C + ' cards are colorless.' : '';
+  const lead = order.slice(0, 2).map((k) => cap1(COLOR_NAMES[k]) + ' (' + st.colors[k] + ')');
+  let s = 'Mostly ' + (lead.length === 2 ? lead[0] + ' and ' + lead[1] : lead[0]);
+  const splash = order.slice(2);
+  if (splash.length) s += ' with a splash of ' + splash.map((k) => COLOR_NAMES[k] + ' (' + st.colors[k] + ')').join(' and ');
+  if (st.colors.C) s += ', plus ' + st.colors.C + ' colorless cards';
+  s += '. ';
+  s += order.length === 1 ? 'One color means your mana will be very reliable.'
+    : order.length === 2 ? 'Two colors means your mana will be fairly reliable.'
+    : 'With three or more colors, make sure you have enough lands that make each color.';
+  return s;
+}
+
+function typesTakeaway(st) {
+  const t = st.types;
+  const creatures = t.Creature || 0;
+  const spells = (t.Instant || 0) + (t.Sorcery || 0);
+  if (!st.total) return '';
+  if (creatures > 0 && creatures >= spells) {
+    const spellWord = spells === 0 ? 'no instants or sorceries'
+      : 'only ' + spells + ' instant' + (spells === 1 ? '' : 's') + ' and sorceries';
+    return creatures + ' creature' + (creatures === 1 ? '' : 's') + ' and ' + spellWord +
+      ' — your plan is to win by attacking.';
+  }
+  if (spells > creatures) {
+    return spells + ' instants and sorceries vs ' + creatures + ' creatures — you win more with spells than with attackers.';
+  }
+  const others = st.total - creatures - spells - (t.Land || 0);
+  return 'A mix of ' + creatures + ' creatures, ' + spells + ' instants and sorceries, and ' + others + ' other cards.';
+}
+
+function speedTakeaway(st) {
+  const sp = st.speed;
+  if (sp.avg === null) return 'No non-land cards with known mana costs yet.';
+  const label = sp.avg < 2.5 ? 'Fast deck' : (sp.avg <= 3.5 ? 'Average-speed deck' : 'Slow deck');
+  const exp = sp.avg < 2.5 ? "you'll pressure opponents early, but you may run out of cards if the game goes long."
+    : sp.avg <= 3.5 ? "you'll have plays through most of the game."
+    : 'your big cards hit hard late, but you need to survive the early turns.';
+  return 'Average mana cost: ' + sp.avg.toFixed(2) + ' (non-land cards — lower is faster). ' + label + ' — ' + exp;
+}
+
+function sizeTakeaway(st) {
+  const sz = st.size;
+  if (sz.avgP === null) return 'No creatures with known power yet.';
+  const impl = sz.avgP < 2 ? 'Abilities like flying or deathtouch help small creatures get through.'
+    : sz.avgP >= 4 ? 'Big creatures end games fast — protect them.'
+    : 'Medium creatures hold their own in a fight.';
+  let s = 'Your creatures average ' + sz.avgP.toFixed(1) + ' power and ' +
+    (sz.avgT !== null ? sz.avgT.toFixed(1) : '—') + ' toughness. ' + impl;
+  if (sz.unknown) {
+    s += ' (' + sz.unknown + (sz.unknown === 1 ? ' creature has' : ' creatures have') +
+      ' unknown power — not counted, not treated as zero.)';
+  }
+  return s;
+}
+
+function synergyTakeaway(st, cards) {
+  const tribe = st.tribes[0], kw = st.keywords[0];
+  const parts = [];
+  if (tribe && tribe.n >= 2) {
+    const ex = tribeExamples(cards, tribe.name, 3);
+    const more = tribe.n - ex.reduce((n, e) => n + e.n, 0);
+    let s = 'Your ' + tribe.n + ' ' + plural(tribe.name) + ' include ' + nameList(ex.map((e) => e.name));
+    if (more > 0) s += ' (and ' + more + ' more)';
+    s += '.';
+    parts.push(s);
+    const ratio = st.creatureCopies ? tribe.n / st.creatureCopies : 0;
+    const boost = ratio >= 0.5 ? 'half or more of your creatures'
+      : ratio >= 0.33 ? 'about a third of your creatures' : 'many of your creatures';
+    parts.push('Cards that say "' + esc(tribe.name) + ' you control get +1/+1" would boost ' + boost + ' at once.');
+  }
+  if (kw) {
+    parts.push(cap(kw.name) + ' appears on ' + kw.n + ' of your cards — more cards with ' +
+      kw.name.toLowerCase() + ' would work well together.');
+  }
+  if (!parts.length) return 'No strong groups yet — add more cards and check back.';
+  return parts.join(' ');
+}
+
+function deckSummary(st) {
+  const sp = st.speed;
+  const speedWord = sp.avg === null ? null : (sp.avg < 2.5 ? 'fast' : (sp.avg <= 3.5 ? 'average-speed' : 'slow'));
+  const order = ['W', 'U', 'B', 'R', 'G'].filter((k) => st.colors[k] > 0)
+    .sort((a, b) => st.colors[b] - st.colors[a]);
+  const colorPart = order.length >= 2 ? COLOR_NAMES[order[0]] + '-' + COLOR_NAMES[order[1]]
+    : order.length === 1 ? COLOR_NAMES[order[0]] : 'colorless';
+  const topTribe = st.tribes[0];
+  const sizeAdj = st.size.avgP !== null ? (st.size.avgP < 2 ? 'small ' : (st.size.avgP >= 4 ? 'big ' : '')) : '';
+  let plan = null;
+  if (topTribe && topTribe.n >= 6) plan = 'lots of ' + sizeAdj + plural(topTribe.name);
+  else if (st.creatureCopies > 0 && st.creatureCopies >= st.spellCopies) plan = 'lots of ' + sizeAdj + 'creatures';
+  else if (st.spellCopies > 0) plan = 'lots of spells';
+  let s = 'This is ' + (speedWord ? 'a ' + speedWord + ' ' : 'a ') + colorPart + ' deck';
+  if (plan) s += ' with ' + plan;
+  return s + '.';
+}
+
+function standoutsHTML(st) {
+  const blocks = [];
+  const exp = st.expensive.slice(0, 3);
+  if (exp.length) {
+    blocks.push({
+      title: 'Highest mana cost',
+      items: exp.map((e) => esc(e.name) + ' (' + e.cmc + ')'),
+    });
+  }
+  const pr = st.priciest.slice(0, 3);
+  if (pr.length) {
+    blocks.push({
+      title: 'Priciest cards',
+      items: pr.map((e) => esc(e.name) + ' ($' + e.price.toFixed(2) + ')'),
+    });
+  }
+  if (st.keywords[0]) {
+    const k = st.keywords[0];
+    blocks.push({
+      title: 'Most used keyword',
+      items: [cap(k.name) + ' — on ' + k.n + (k.n === 1 ? ' card' : ' cards')],
+    });
+  }
+  if (!blocks.length) return '';
+  return '<div class="stat-chart"><h4>Standouts</h4>' + blocks.map((b) =>
+    '<p class="standout-title">' + esc(b.title) + '</p><ul class="stat-list">' +
+    b.items.map((i) => '<li>' + i + '</li>').join('') + '</ul>'
+  ).join('') + '</div>';
+}
+
+// Tips for your deck: up to 5, one sentence each, only when they apply.
+function deckTips(st) {
+  const tips = [];
+  const c = st.curve;
+  if (st.curveTotal > 0 && c[1] + c[2] === 0) {
+    tips.push('You have no cards costing 1–2 mana — you might have nothing to do on the first turns.');
+  }
+  const colorKeys = ['W', 'U', 'B', 'R', 'G'].filter((k) => st.colors[k] > 0);
+  if (colorKeys.length >= 3) {
+    colorKeys.forEach((k) => {
+      if (st.colors[k] < 4) {
+        tips.push('Only ' + st.colors[k] + ' ' + COLOR_NAMES[k] + ' card' + (st.colors[k] === 1 ? '' : 's') +
+          ' — you may rarely draw ' + (st.colors[k] === 1 ? 'it' : 'them') + '.');
+      }
+    });
+  }
+  const tribe = st.tribes[0];
+  if (tribe && tribe.n >= 6) {
+    tips.push('Your biggest group is ' + plural(tribe.name) + ' (' + tribe.n + ' cards). Cards that help ' +
+      plural(tribe.name).toLowerCase() + ' would make your deck stronger.');
+  }
+  const kw = st.keywords[0];
+  if (kw && kw.n >= 3) {
+    tips.push(cap(kw.name) + ' appears on ' + kw.n + ' of your cards — more cards with ' +
+      kw.name.toLowerCase() + ' would work well together.');
+  }
+  const hasKw = (w) => st.keywords.some((k) => k.name.toLowerCase() === w);
+  const sz = st.size;
+  if (sz.avgP !== null && sz.avgP >= 4 && hasKw('trample')) {
+    const tn = st.keywords.find((k) => k.name.toLowerCase() === 'trample').n;
+    tips.push('Your creatures are big (avg ' + sz.avgP.toFixed(1) + ' power) and ' + tn +
+      ' have trample — trample is perfect for big creatures.');
+  }
+  if (sz.avgP !== null && sz.avgP <= 2 && hasKw('deathtouch')) {
+    const dn = st.keywords.find((k) => k.name.toLowerCase() === 'deathtouch').n;
+    tips.push('Your creatures are small (avg ' + sz.avgP.toFixed(1) + ' power) and ' + dn +
+      ' have deathtouch — deathtouch lets small creatures beat big ones.');
+  }
+  const big6 = st.expensive.filter((e) => e.cmc >= 6).reduce((n, e) => n + e.n, 0);
+  const expected = deck.format === 'commander' ? 37 : 24;
+  if (big6 >= 6 && st.landCount < expected - 6) {
+    tips.push('You have ' + big6 + ' cards costing 6+ mana but only ' + st.landCount +
+      ' lands in a ' + st.total + '-card deck — you may struggle to cast them.');
+  }
+  if (st.total >= 40 && st.landCount < expected - 6 && !(big6 >= 6 && st.landCount < expected - 6)) {
+    tips.push('Only ' + st.landCount + ' lands — most ' + cap(deck.format) +
+      ' decks want around ' + expected + '. You may miss land drops.');
+  }
+  if (st.total >= 40 && st.landCount > expected + 6) {
+    tips.push(st.landCount + ' lands is a lot — around ' + expected +
+      ' is typical. You could swap some for spells.');
+  }
+  return tips.slice(0, 5);
+}
+
+function statChart(title, body, takeaway, caption) {
+  return '<div class="stat-chart"><h4>' + esc(title) + '</h4>' +
+    (caption ? '<p class="muted small">' + caption + '</p>' : '') + body +
+    (takeaway ? '<p class="stat-takeaway">' + takeaway + '</p>' : '') + '</div>';
+}
+
+function synergyHTML(st, cards) {
+  let html = '';
+  const tribe = st.tribes;
+  html += '<p class="standout-title">Top creature types</p>';
+  html += tribe.length
+    ? '<ol class="stat-list">' + tribe.map((t) => '<li>' + esc(t.name) + ' — ' + t.n + '</li>').join('') + '</ol>'
+    : '<p class="muted">None yet.</p>';
+  const kw = st.keywords;
+  html += '<p class="standout-title">Top keywords</p>';
+  html += kw.length
+    ? '<ol class="stat-list">' + kw.map((k) => '<li>' + esc(cap(k.name)) + ' — ' + k.n + '</li>').join('') + '</ol>'
+    : '<p class="muted">None yet.</p>';
+  return html;
+}
+
+function renderStats() {
+  const box = $('#stats-charts');
+  const note = $('#stats-note');
+  if (!box) return;
+  if (!deck.cards.length) {
+    if (note) note.textContent = '';
+    box.innerHTML = '<p class="muted">Add cards to see your deck stats.</p>';
+    return;
+  }
+  const st = computeStats(deck.cards);
+  if (note) {
+    if (statsBackfillBusy[deck.id]) note.textContent = 'Loading card stats…';
+    else if (st.missing > 0) {
+      note.textContent = 'Stats missing for ' + st.missing + (st.missing === 1 ? ' card' : ' cards') +
+        ' — the charts below use the rest.';
+    } else note.textContent = '';
+  }
+  let html = '<p class="deck-summary"><strong>' + esc(deckSummary(st)) + '</strong></p>';
+  html += statChart('Mana curve', manaCurveSVG(st), manaTakeaway(st), 'Lands are not counted.');
+  html += statChart('Colors', colorsSVG(st), colorsTakeaway(st));
+  html += statChart('Card types', typesSVG(st), typesTakeaway(st));
+  html += statChart('Speed', speedHTML(st), speedTakeaway(st));
+  html += statChart('Creature size', sizeHTML(st), sizeTakeaway(st));
+  html += statChart('Cards that may work well together', synergyHTML(st, deck.cards),
+    synergyTakeaway(st, deck.cards), 'Cards sharing types or abilities often boost each other.');
+  html += standoutsHTML(st);
+  const tips = deckTips(st);
+  if (tips.length) {
+    html += '<div class="stat-chart"><h4>Tips for your deck</h4><ul class="tips-list">' +
+      tips.map((t) => '<li>' + esc(t) + '</li>').join('') + '</ul></div>';
+  }
+  box.innerHTML = html;
+}
+
+function speedHTML(st) {
+  const sp = st.speed;
+  let html = '';
+  if (sp.avg !== null) {
+    html += '<p><strong>Average mana cost: ' + sp.avg.toFixed(2) + '</strong> ' +
+      '<span class="muted small">(non-land cards — lower is faster)</span></p>';
+  } else {
+    html += '<p class="muted">No non-land cards with known mana costs yet.</p>';
+  }
+  html += speedBarSVG(st);
+  return html;
+}
+
+function sizeHTML(st) {
+  const sz = st.size;
+  let html = '';
+  if (sz.avgP !== null) {
+    html += '<p><strong>Average creature: ' + sz.avgP.toFixed(1) + '/' +
+      (sz.avgT !== null ? sz.avgT.toFixed(1) : '—') + '</strong></p>';
+  } else {
+    html += '<p class="muted">No creatures with known power yet.</p>';
+  }
+  html += sizeSVG(st);
+  if (sz.unknown) {
+    html += '<p class="muted small">' + sz.unknown + (sz.unknown === 1 ? ' creature has' : ' creatures have') +
+      ' unknown power (like *) — shown separately, not counted as zero.</p>';
+  }
+  return html;
+}
+
+// One-time per-deck backfill: fetch stats for entries that are missing them
+// (cards saved before v2.4), apply, and save. Never retried in one session.
+async function maybeBackfillStats() {
+  const missing = deck.cards.filter((c) => !c.statsOk && c.pid);
+  if (!missing.length) return;
+  if (statsBackfillTried[deck.id] || statsBackfillBusy[deck.id]) return;
+  statsBackfillBusy[deck.id] = true;
+  const note = $('#stats-note');
+  if (note) note.textContent = 'Loading card stats…';
+  try {
+    const r = await api('/api/cards/collection', {
+      method: 'POST',
+      body: JSON.stringify({ identifiers: missing.map((c) => c.pid) }),
+    });
+    if (r.ok && r.data && r.data.cards) {
+      let applied = 0;
+      missing.forEach((c) => {
+        const s = r.data.cards[c.pid];
+        if (s) {
+          const merged = backfillCard(Object.assign({}, c, s, { statsOk: true }));
+          Object.keys(merged).forEach((k) => { c[k] = merged[k]; });
+          applied++;
+        }
+      });
+      if (applied) saveDeck();
+    }
+  } catch (e) { /* charts render from whatever data exists */ }
+  statsBackfillBusy[deck.id] = false;
+  statsBackfillTried[deck.id] = true;
+  renderStats();
+}
+
 function addCardToDeck(card, asCommander) {
-  const entry = {
+  const entry = Object.assign({
     pid: card.id, name: card.name, set: (card.set || '').toUpperCase(),
     cn: card.collector_number || '', price: priceOf(card), priceNum: numPriceOf(card),
     img: imgOf(card), back: backImgOf(card),
     checked: false, count: 1, commander: !!asCommander,
-  };
+  }, statFieldsOf(card));
   const basic = isBasicLand(card);
   const existing = deck.cards.find((c) => c.pid === entry.pid && c.commander === entry.commander);
 
@@ -583,6 +1178,8 @@ function renderDeck() {
   $('#checkoff-progress').setAttribute('aria-valuenow', String(pct));
   renderDeckSelect();
   updateDeckPill();
+  renderStats();
+  maybeBackfillStats();
 }
 
 function updateDeckPill() {
