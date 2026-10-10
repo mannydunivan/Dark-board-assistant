@@ -249,3 +249,26 @@ body:not(.easy-view) .easy-only { display: none; }
   font-weight: bold;
   margin: .5rem 0;
 }
+
+/* ---------- deck stats (v2.4) ---------- */
+#deck-stats {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: .8rem 1rem;
+  margin: .8rem 0;
+}
+#deck-stats h3 { margin: .2rem 0 .4rem; }
+.stat-chart { margin: 1.1rem 0; }
+.stat-chart h4 { margin: .4rem 0 .3rem; }
+.stat-svg { width: 100%; height: auto; display: block; max-width: 480px; }
+.stat-svg text { fill: #f3e7d3; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.stat-takeaway { margin: .45rem 0 0; }
+.deck-summary { font-size: 1.05rem; margin: .4rem 0 .8rem; }
+.standout-title { font-weight: bold; margin: .6rem 0 .2rem; }
+.stat-list { list-style: none; padding: 0; margin: .2rem 0; }
+.stat-list li { margin: .2rem 0; }
+.tips-list { margin: .4rem 0; padding-left: 1.2rem; }
+.tips-list li { margin: .3rem 0; }
+.legend-dot { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-right: .25em; vertical-align: baseline; }
+.muted.small { font-size: .85rem; }
