@@ -16,7 +16,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
-const VERSION = '2.0';
+const VERSION = '2.1';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -395,6 +395,12 @@ app.get('/api/theme', async (req, res) => {
       .status(e.status || 502)
       .json({ error: 'Deck ideas are unavailable right now. Please try again in a moment.' });
   }
+});
+
+// Serve the web app manifest with the correct content type for installability.
+app.get('/manifest.webmanifest', (_req, res) => {
+  res.type('application/manifest+json');
+  res.sendFile(path.join(__dirname, 'public', 'manifest.webmanifest'));
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
