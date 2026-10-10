@@ -60,6 +60,29 @@ Cards added from search bring their stats with them. Decks saved before v2.4
 get their stats through a one-time automatic lookup when you open them
 (the server asks Scryfall for just the cards that are missing stats).
 
+## Basic lands finder (v2.5)
+
+The Search tab has a **Basic lands** section with one button each for
+**Plains, Island, Swamp, Mountain, Forest, and Wastes**. Tapping a button
+searches Scryfall for every printing of that land, grouped by set in release-date
+order, so you can pick the art you like. If you type a set code in
+the search form first, the results are narrowed to that set. Results use the
+normal results list, so the picture viewer, **+ Add** buttons, and page
+navigation all work the same — and basic lands never count against your
+deck's copy limits.
+
+## Power estimate (v2.5)
+
+The Deck stats section now opens with a **Power estimate**: a 1–10 score
+shown as a big number and a 10-segment meter, with the four factors behind
+it — **Speed** (average mana cost), **Consistency** (land count and early
+plays), **Synergy** (how much of the deck shares a creature type or
+keyword), and **Curve** (smoothness from 1 to 4 mana) — each with a
+plain-language sentence. It is labeled as an estimate from the deck's
+numbers only: it can't measure your skill, your opponents, or surprise
+combos. Decks with fewer than 10 cards show a "add more cards" note
+instead.
+
 ## Accounts (v2.0, optional)
 
 Set these two environment variables to turn on email/password accounts.
