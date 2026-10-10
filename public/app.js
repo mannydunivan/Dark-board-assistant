@@ -1,5 +1,5 @@
 'use strict';
-/* The Dark Board Assistant — frontend (v2.0) */
+/* The Dark Board Assistant — frontend (v2.3) */
 
 const $ = (s, el) => (el || document).querySelector(s);
 const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
@@ -28,15 +28,96 @@ function setToggle(sel, on, label) {
   b.textContent = mark + ' ' + label + ' — ' + (on ? 'on' : 'off');
 }
 
-// ---------- deck storage (this browser only) ----------
-const DECK_KEY = 'dba-deck';
-let deck = JSON.parse(localStorage.getItem(DECK_KEY) || 'null') || {
-  name: 'My deck', format: 'commander', cards: [],
-};
-function saveDeck() {
-  localStorage.setItem(DECK_KEY, JSON.stringify(deck));
+// ---------- deck storage: several decks at once (this browser only) ----------
+// Logged out, the decks live here under DECKS_KEY. The very first run migrates
+// the old single-deck key ('dba-deck') once, keeping every card and check-off.
+// The old key is left alone, so nothing is ever lost.
+const DECKS_KEY = 'dba-decks';
+const OLD_DECK_KEY = 'dba-deck';
+function newId() {
+  try { if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID(); } catch (e) { /* fall through */ }
+  return 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+// Numeric price helpers (Feature: market price total per deck).
+function parsePriceNum(s) {
+  if (typeof s === 'number' && isFinite(s)) return s;
+  const m = /^\$\s*([\d,]+(?:\.\d{1,2})?)$/.exec(String(s || '').trim());
+  if (m) {
+    const n = parseFloat(m[1].replace(/,/g, ''));
+    return isNaN(n) ? null : n;
+  }
+  return null;
+}
+function backfillCard(c) {
+  c = c || {};
+  if (c.priceNum === undefined) c.priceNum = parsePriceNum(c.price);
+  if (typeof c.priceNum !== 'number' || !isFinite(c.priceNum)) c.priceNum = null;
+  c.count = Number(c.count) > 0 ? Math.floor(Number(c.count)) : 1;
+  c.checked = !!c.checked;
+  c.commander = !!c.commander;
+  return c;
+}
+function blankDeck(name) {
+  return { id: newId(), name: name || 'New deck', format: 'commander', cards: [] };
+}
+function sanitizeDeck(d) {
+  d = d || {};
+  d.id = d.id || newId();
+  d.name = d.name || 'My deck';
+  d.format = ['commander', 'standard', 'modern'].includes(d.format) ? d.format : 'commander';
+  d.cards = Array.isArray(d.cards) ? d.cards.map(backfillCard) : [];
+  return d;
+}
+function loadCollection() {
+  let col = null;
+  try { col = JSON.parse(localStorage.getItem(DECKS_KEY) || 'null'); } catch (e) { /* corrupted: rebuild below */ }
+  if (col && Array.isArray(col.decks) && col.decks.length) {
+    col.decks = col.decks.map(sanitizeDeck);
+    if (!col.decks.some((d) => d.id === col.activeId)) col.activeId = col.decks[0].id;
+    return col;
+  }
+  let old = null;
+  try { old = JSON.parse(localStorage.getItem(OLD_DECK_KEY) || 'null'); } catch (e) { /* ignore */ }
+  const d = sanitizeDeck({ name: old && old.name, format: old && old.format, cards: old && old.cards });
+  const migrated = { decks: [d], activeId: d.id };
+  try { localStorage.setItem(DECKS_KEY, JSON.stringify(migrated)); } catch (e) { /* ignore */ }
+  return migrated;
+}
+let collection = loadCollection();
+// `deck` always points at the ACTIVE deck entry, so every deck function below
+// keeps working on whichever deck is active.
+let deck = collection.decks.find((d) => d.id === collection.activeId) || collection.decks[0];
+function saveDecks() {
+  collection.activeId = deck.id;
+  try { localStorage.setItem(DECKS_KEY, JSON.stringify(collection)); } catch (e) { /* storage full: keep going */ }
   updateDeckPill();
-  scheduleServerSync(); // no-op unless logged in (v2.0)
+  scheduleServerSync(); // no-op unless logged in
+}
+function saveDeck() { saveDecks(); } // old name, still used everywhere
+
+// Keep the deck tab inputs (name field, format picker, deck switcher) in sync
+// with the active deck.
+function syncDeckInputs() {
+  $('#deck-name').value = deck.name;
+  $('#deck-format').value = deck.format;
+  searchFormat = deck.format;
+  $$('.format-btn').forEach((b) => {
+    const on = b.dataset.format === deck.format;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  renderDeckSelect();
+}
+function renderDeckSelect() {
+  const sel = $('#deck-select');
+  sel.innerHTML = '';
+  collection.decks.forEach((d) => {
+    const o = document.createElement('option');
+    o.value = d.id;
+    o.textContent = d.name + ' (' + cap(d.format) + ')';
+    if (d.id === deck.id) o.selected = true;
+    sel.appendChild(o);
+  });
 }
 
 // ---------- announcements ----------
@@ -67,7 +148,6 @@ $$('.format-btn').forEach((btn) => {
     saveDeck();
   });
 });
-$('#deck-format').value = deck.format;
 $('#deck-format').addEventListener('change', (e) => {
   deck.format = e.target.value;
   searchFormat = deck.format;
@@ -79,8 +159,102 @@ $('#deck-format').addEventListener('change', (e) => {
   saveDeck();
   renderDeck();
 });
-$('#deck-name').value = deck.name;
-$('#deck-name').addEventListener('input', (e) => { deck.name = e.target.value || 'My deck'; saveDeck(); });
+$('#deck-name').addEventListener('input', (e) => {
+  deck.name = e.target.value || 'My deck';
+  saveDeck();
+  renderDeckSelect(); // keep the switcher label fresh while typing
+});
+
+// ---------- multiple decks: switch, new, rename, delete ----------
+function activeKeyFor(uid) { return 'dba-active-' + uid; }
+
+async function setActiveDeck(id) {
+  const target = collection.decks.find((d) => d.id === id);
+  if (!target || target.id === deck.id) return;
+  if (accountsOn && me) await syncDeckToServer(deck); // save the deck we're leaving first
+  deck = target;
+  if (accountsOn && me) {
+    try { localStorage.setItem(activeKeyFor(me.id), deck.serverId || deck.id); } catch (e) { /* ignore */ }
+    if (deck.serverId) {
+      try {
+        const full = await api('/api/decks/' + encodeURIComponent(deck.serverId));
+        if (full.ok) {
+          deck.name = full.data.name || deck.name;
+          deck.format = ['commander', 'standard', 'modern'].includes(full.data.format) ? full.data.format : deck.format;
+          deck.cards = Array.isArray(full.data.cards) ? full.data.cards.map(backfillCard) : [];
+        } else if (full.status === 404) { deck.serverId = null; }
+      } catch (e) { /* keep the local copy */ }
+    }
+  }
+  syncDeckInputs();
+  saveDecks();
+  renderDeck();
+  announce('Switched to ' + deck.name + '.');
+}
+$('#deck-select').addEventListener('change', (e) => setActiveDeck(e.target.value));
+
+async function createDeck() {
+  if (accountsOn && me) await syncDeckToServer(deck);
+  const d = blankDeck('New deck ' + (collection.decks.length + 1));
+  collection.decks.push(d);
+  if (accountsOn && me) {
+    const r = await api('/api/decks', { method: 'POST', body: JSON.stringify({ name: d.name, format: d.format, cards: [], checks: {} }) });
+    if (r.ok && r.data && r.data.id) d.serverId = r.data.id;
+    else if (r.status === 401) { await silentLogout(); }
+  }
+  deck = d;
+  if (accountsOn && me) {
+    try { localStorage.setItem(activeKeyFor(me.id), deck.serverId || deck.id); } catch (e) { /* ignore */ }
+  }
+  syncDeckInputs();
+  saveDecks();
+  renderDeck();
+  announce('New deck created. It is now the active deck.');
+}
+$('#new-deck').addEventListener('click', () => createDeck());
+
+function renameDeck() {
+  if (typeof prompt !== 'function') return;
+  const name = prompt('New name for this deck:', deck.name);
+  if (name === null) return; // cancelled
+  deck.name = name.trim() || deck.name;
+  syncDeckInputs();
+  saveDecks();
+  renderDeck();
+  announce('Deck renamed to ' + deck.name + '.');
+}
+$('#rename-deck').addEventListener('click', renameDeck);
+
+let deleteArmed = false, deleteTimer = null;
+async function confirmDeleteDeck() {
+  const btn = $('#delete-deck');
+  if (!deleteArmed) {
+    deleteArmed = true;
+    btn.textContent = 'Tap again to delete';
+    announce('Tap Delete once more to remove "' + deck.name + '". This cannot be undone.');
+    clearTimeout(deleteTimer);
+    deleteTimer = setTimeout(() => { deleteArmed = false; btn.textContent = 'Delete'; }, 6000);
+    return;
+  }
+  clearTimeout(deleteTimer);
+  deleteArmed = false;
+  btn.textContent = 'Delete';
+  const doomed = deck;
+  if (accountsOn && me && doomed.serverId) {
+    try { await api('/api/decks/' + encodeURIComponent(doomed.serverId), { method: 'DELETE' }); } catch (e) { /* keep going */ }
+  }
+  collection.decks = collection.decks.filter((d) => d.id !== doomed.id);
+  if (!collection.decks.length) collection.decks.push(blankDeck('My deck'));
+  deck = collection.decks[0];
+  if (accountsOn && me) {
+    try { localStorage.setItem(activeKeyFor(me.id), deck.serverId || deck.id); } catch (e) { /* ignore */ }
+  }
+  syncDeckInputs();
+  saveDecks();
+  renderDeck();
+  announce('Deck deleted.');
+}
+$('#delete-deck').addEventListener('click', () => confirmDeleteDeck());
 
 // ---------- Scryfall helpers ----------
 function clean(s) { return (s || '').replace(/["“”]/g, '').trim(); }
@@ -99,6 +273,11 @@ function backImgOf(card) {
 function priceOf(card) {
   const p = card.prices && card.prices.usd;
   return p ? '$' + Number(p).toFixed(2) : '—';
+}
+function numPriceOf(card) {
+  const p = card.prices && card.prices.usd;
+  const n = parseFloat(p);
+  return isNaN(n) ? null : n;
 }
 const FORMAT_KEY = { commander: 'commander', standard: 'standard', modern: 'modern' };
 function legalityLine(card) {
@@ -288,10 +467,31 @@ $('#viewer-add').addEventListener('click', () => {
 // ---------- deck ----------
 function deckTotal() { return deck.cards.reduce((n, c) => n + c.count, 0); }
 
+// Market price total for the active deck.
+function deckValue() {
+  let total = 0, missing = 0;
+  deck.cards.forEach((c) => {
+    const n = typeof c.priceNum === 'number' && isFinite(c.priceNum) ? c.priceNum : null;
+    const count = c.count > 0 ? c.count : 1;
+    if (n === null) missing += count;
+    else total += n * count;
+  });
+  return { total: Math.round(total * 100) / 100, missing: missing };
+}
+function deckValueLine() {
+  if (!deck.cards.length) return '';
+  const priced = deck.cards.some((c) => typeof c.priceNum === 'number' && isFinite(c.priceNum));
+  if (!priced) return 'Deck value: — (no prices listed)';
+  const v = deckValue();
+  let s = 'Deck value: $' + v.total.toFixed(2);
+  if (v.missing > 0) s += ' · ' + v.missing + (v.missing === 1 ? ' card has' : ' cards have') + ' no listed price';
+  return s;
+}
+
 function addCardToDeck(card, asCommander) {
   const entry = {
     pid: card.id, name: card.name, set: (card.set || '').toUpperCase(),
-    cn: card.collector_number || '', price: priceOf(card),
+    cn: card.collector_number || '', price: priceOf(card), priceNum: numPriceOf(card),
     img: imgOf(card), back: backImgOf(card),
     checked: false, count: 1, commander: !!asCommander,
   };
@@ -373,12 +573,15 @@ function renderDeck() {
 
   $('#rule-check').innerHTML = ruleCheckLines().join('<br>');
 
+  $('#deck-value').textContent = deckValueLine();
+
   const checked = deck.cards.filter((c) => c.checked).length;
   const total = deck.cards.length;
   $('#checkoff-count').textContent = checked + ' / ' + total + ' cards';
   const pct = total ? Math.round((checked / total) * 100) : 0;
   $('#checkoff-fill').style.width = pct + '%';
   $('#checkoff-progress').setAttribute('aria-valuenow', String(pct));
+  renderDeckSelect();
   updateDeckPill();
 }
 
@@ -400,6 +603,8 @@ function deckText() {
     lines.push((c.count > 1 ? c.count + 'x ' : '') + c.name + ' (' + c.set + ' #' + c.cn + ') — ' + c.price);
   });
   lines.push('Total: ' + deckTotal() + ' cards');
+  const valueLine = deckValueLine();
+  if (valueLine) lines.push(valueLine);
   return lines.join('\n');
 }
 
@@ -535,9 +740,7 @@ $('#toggle-contrast').addEventListener('click', () => { prefs.strongContrast = !
 // exactly as before: the deck saves in this browser only.
 let accountsOn = false;
 let me = null;            // {id, email} when logged in
-let serverDeckId = null;  // server deck the working deck syncs to
 let syncTimer = null;
-const MOVED_KEY = 'dba-moved';
 
 async function api(path, opts) {
   const res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
@@ -555,39 +758,61 @@ function checksOf(d) {
 function scheduleServerSync() {
   if (!accountsOn || !me) return;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(syncDeckToServer, 1500);
+  syncTimer = setTimeout(() => syncDeckToServer(), 1500);
 }
 
-async function syncDeckToServer() {
+// Save one deck entry to the account. Each local deck has its own serverId,
+// so the whole collection is stored server-side, one server deck per deck.
+async function syncDeckToServer(entry) {
   if (!accountsOn || !me) return;
+  entry = entry || deck;
   clearTimeout(syncTimer);
-  const body = JSON.stringify({ name: deck.name, format: deck.format, cards: deck.cards, checks: checksOf(deck) });
-  if (!serverDeckId) {
+  const body = JSON.stringify({ name: entry.name, format: entry.format, cards: entry.cards, checks: checksOf(entry) });
+  if (!entry.serverId) {
     const r = await api('/api/decks', { method: 'POST', body });
-    if (r.ok && r.data && r.data.id) { serverDeckId = r.data.id; announce('Deck saved to your account.'); }
+    if (r.ok && r.data && r.data.id) {
+      entry.serverId = r.data.id;
+      collection.activeId = deck.id;
+      try { localStorage.setItem(DECKS_KEY, JSON.stringify(collection)); } catch (e) { /* ignore */ }
+    }
     else if (r.status === 401) { await silentLogout(); }
     return;
   }
-  const r = await api('/api/decks/' + encodeURIComponent(serverDeckId), { method: 'PUT', body });
+  const r = await api('/api/decks/' + encodeURIComponent(entry.serverId), { method: 'PUT', body });
   if (r.status === 401) { await silentLogout(); return; }
-  if (r.status === 404) { serverDeckId = null; scheduleServerSync(); }
+  if (r.status === 404) { entry.serverId = null; scheduleServerSync(); }
 }
 
-function loadDeckIntoUI(d) {
-  deck = {
-    name: d.name || 'My deck',
-    format: ['commander', 'standard', 'modern'].includes(d.format) ? d.format : 'commander',
-    cards: Array.isArray(d.cards) ? d.cards : [],
-  };
-  searchFormat = deck.format;
-  $('#deck-name').value = deck.name;
-  $('#deck-format').value = deck.format;
-  $$('.format-btn').forEach((b) => {
-    const on = b.dataset.format === deck.format;
-    b.classList.toggle('active', on);
-    b.setAttribute('aria-pressed', String(on));
-  });
-  saveDeck();
+function movedKeyFor(uid) { return 'dba-moved-' + uid; }
+
+// Load the account's decks from the server into the local collection.
+async function loadCollectionFromServer() {
+  const r = await api('/api/decks');
+  if (!r.ok) return;
+  if (r.data.length) {
+    const fresh = [];
+    for (const s of r.data) {
+      const full = await api('/api/decks/' + encodeURIComponent(s.id));
+      if (!full.ok) continue;
+      const entry = sanitizeDeck({ name: full.data.name, format: full.data.format, cards: full.data.cards });
+      entry.serverId = s.id;
+      fresh.push(entry);
+    }
+    if (fresh.length) {
+      collection = { decks: fresh, activeId: fresh[0].id };
+      let want = null;
+      try { want = localStorage.getItem(activeKeyFor(me.id)); } catch (e) { /* ignore */ }
+      deck = fresh.find((d) => d.serverId === want || d.id === want) || fresh[0];
+      saveDecks();
+    }
+  } else {
+    // No decks on the account yet: keep the local decks, but forget any
+    // server ids left over from a different account on this browser.
+    collection.decks.forEach((d) => { delete d.serverId; });
+    deck = collection.decks.find((d) => d.id === collection.activeId) || collection.decks[0];
+    saveDecks();
+  }
+  syncDeckInputs();
   renderDeck();
 }
 
@@ -609,8 +834,42 @@ function updateAccountUI() {
 }
 
 async function silentLogout() {
-  me = null; serverDeckId = null; clearTimeout(syncTimer);
+  me = null; clearTimeout(syncTimer);
   updateAccountUI();
+}
+
+// One-tap move of ALL local decks to the account (non-destructive: the local
+// copies stay on this device too).
+function updateMoveAllRow() {
+  const row = $('#move-deck-row');
+  if (!accountsOn || !me) { row.hidden = true; return; }
+  let moved = null;
+  try { moved = localStorage.getItem(movedKeyFor(me.id)); } catch (e) { /* ignore */ }
+  const withCards = collection.decks.filter((d) => d.cards.length && !d.serverId);
+  if (!withCards.length || moved) { row.hidden = true; return; }
+  row.hidden = false;
+  $('#move-deck').textContent = withCards.length === 1
+    ? 'Move my deck to my account'
+    : 'Move all ' + withCards.length + ' decks to my account';
+  $('#move-deck').onclick = async () => {
+    let n = 0;
+    for (const d of withCards) {
+      const r = await api('/api/decks', {
+        method: 'POST',
+        body: JSON.stringify({ name: d.name, format: d.format, cards: d.cards, checks: checksOf(d) }),
+      });
+      if (r.ok && r.data && r.data.id) { d.serverId = r.data.id; n++; }
+      else if (r.status === 401) { await silentLogout(); return; }
+    }
+    if (n > 0) {
+      try { localStorage.setItem(movedKeyFor(me.id), '1'); } catch (e) { /* ignore */ }
+      saveDecks();
+      row.hidden = true;
+      announce(n + (n === 1 ? ' deck was' : ' decks were') + ' copied to your account. The copies on this device are still here too.');
+    } else {
+      announce('Could not move the decks right now. Please try again in a moment.');
+    }
+  };
 }
 
 async function onLogin(user) {
@@ -618,37 +877,11 @@ async function onLogin(user) {
   acctError(null);
   $('#acct-email').value = '';
   $('#acct-password').value = '';
-  const before = JSON.parse(JSON.stringify(deck)); // local deck before login (for the move offer)
   updateAccountUI();
   announce('Logged in as ' + user.email + '.');
-  try {
-    const r = await api('/api/decks');
-    if (r.ok && r.data.length) {
-      const full = await api('/api/decks/' + encodeURIComponent(r.data[0].id));
-      if (full.ok) {
-        serverDeckId = full.data.id;
-        loadDeckIntoUI({ name: full.data.name, format: full.data.format, cards: full.data.cards });
-      }
-    }
-  } catch (e) { /* stay on local deck */ }
-  // One-tap move of the pre-login local deck (non-destructive).
-  if (before.cards && before.cards.length && !localStorage.getItem(MOVED_KEY)) {
-    const row = $('#move-deck-row');
-    row.hidden = false;
-    $('#move-deck').onclick = async () => {
-      const r = await api('/api/decks', {
-        method: 'POST',
-        body: JSON.stringify({ name: before.name, format: before.format, cards: before.cards, checks: checksOf(before) }),
-      });
-      if (r.ok) {
-        localStorage.setItem(MOVED_KEY, '1');
-        row.hidden = true;
-        announce('Your deck was copied to your account. The copy on this device is still here too.');
-      } else {
-        announce('Could not move the deck right now. Please try again in a moment.');
-      }
-    };
-  }
+  try { await loadCollectionFromServer(); }
+  catch (e) { /* stay on the local decks */ }
+  updateMoveAllRow();
 }
 
 async function doAuth(kind) {
@@ -666,10 +899,11 @@ $('#acct-signup').addEventListener('click', () => doAuth('signup'));
 $('#acct-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') doAuth('login'); });
 
 $('#acct-logout').addEventListener('click', async () => {
+  await syncDeckToServer(deck); // save any last changes first
   await api('/api/auth/logout', { method: 'POST' });
   await silentLogout();
   $('#move-deck-row').hidden = true;
-  announce('Logged out. Your deck is still saved on this device.');
+  announce('Logged out. Your decks are still saved on this device.');
 });
 
 async function saveToAccountNow() {
@@ -692,20 +926,15 @@ async function initAccount() {
     if (m.ok) {
       me = m.data;
       updateAccountUI();
-      const r = await api('/api/decks');
-      if (r.ok && r.data.length) {
-        const full = await api('/api/decks/' + encodeURIComponent(r.data[0].id));
-        if (full.ok) {
-          serverDeckId = full.data.id;
-          loadDeckIntoUI({ name: full.data.name, format: full.data.format, cards: full.data.cards });
-        }
-      }
+      await loadCollectionFromServer();
+      updateMoveAllRow();
     }
   } catch (e) { /* stay logged out, local mode */ }
 }
 
 // ---------- init ----------
 applyPrefs();
+syncDeckInputs();
 renderDeck();
 updateDeckPill();
 initAccount();
