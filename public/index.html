@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Dark Board Assistant</title>
+<meta name="description" content="Search Magic: The Gathering cards, see prices and pictures, and build Commander, Standard, or Modern decks.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<header class="app-header">
+  <div class="header-row">
+    <h1>The Dark Board Assistant</h1>
+    <span class="version-badge" aria-label="Version 1.4">v1.4</span>
+  </div>
+  <nav class="tabs" aria-label="Main sections">
+    <button type="button" class="tab active" data-tab="search" aria-pressed="true">Search cards</button>
+    <button type="button" class="tab" data-tab="deck" aria-pressed="false">My deck <span id="deck-count" class="pill" aria-hidden="true"></span></button>
+    <button type="button" class="tab" data-tab="ideas" aria-pressed="false">Deck ideas</button>
+    <button type="button" class="tab" data-tab="access" aria-pressed="false">Easy access</button>
+  </nav>
+</header>
+
+<main id="main">
+  <div id="announce" class="sr-only" role="status" aria-live="polite"></div>
+
+  <!-- ============ SEARCH ============ -->
+  <section id="tab-search" class="panel" aria-label="Search cards">
+    <h2>Find a card</h2>
+
+    <div class="format-picker" role="group" aria-label="Choose a format">
+      <span class="field-label" id="format-label">Deck format:</span>
+      <button type="button" class="format-btn active" data-format="commander" aria-pressed="true">Commander</button>
+      <button type="button" class="format-btn" data-format="standard" aria-pressed="false">Standard</button>
+      <button type="button" class="format-btn" data-format="modern" aria-pressed="false">Modern</button>
+    </div>
+
+    <form id="search-form" class="search-form" autocomplete="off">
+      <div class="field">
+        <label for="q-name">Card name</label>
+        <input id="q-name" type="text" placeholder="e.g. Sol Ring" list="name-suggest">
+        <datalist id="name-suggest"></datalist>
+      </div>
+      <div class="field">
+        <label for="q-type">Creature type</label>
+        <input id="q-type" type="text" placeholder="e.g. Dragon">
+      </div>
+      <div class="field">
+        <label for="q-ability">Ability / rules text</label>
+        <input id="q-ability" type="text" placeholder="e.g. flying, draw a card">
+      </div>
+      <fieldset class="field colors">
+        <legend>Mana colors</legend>
+        <label><input type="checkbox" name="color" value="w"> White</label>
+        <label><input type="checkbox" name="color" value="u"> Blue</label>
+        <label><input type="checkbox" name="color" value="b"> Black</label>
+        <label><input type="checkbox" name="color" value="r"> Red</label>
+        <label><input type="checkbox" name="color" value="g"> Green</label>
+      </fieldset>
+
+      <button type="button" id="more-filters-btn" class="secondary" aria-expanded="false">
+        More choices ▸
+      </button>
+      <div id="more-filters" class="more-filters" hidden>
+        <div class="field">
+          <label for="q-set">Set code</label>
+          <input id="q-set" type="text" placeholder="e.g. LTR">
+        </div>
+        <div class="field">
+          <label for="q-maxprice">Max price (USD)</label>
+          <input id="q-maxprice" type="number" min="0" step="0.01" placeholder="e.g. 5">
+        </div>
+        <label class="check"><input type="checkbox" id="q-prints"> Show every printing / version in results</label>
+      </div>
+
+      <button type="submit" class="primary big">Search</button>
+    </form>
+
+    <div id="results-info" class="results-info" aria-hidden="true"></div>
+    <div id="results" class="card-grid"></div>
+    <div class="pager" id="pager" hidden>
+      <button type="button" id="prev-page" class="secondary">← Back</button>
+      <button type="button" id="next-page" class="secondary">More →</button>
+    </div>
+  </section>
+
+  <!-- ============ DECK ============ -->
+  <section id="tab-deck" class="panel" hidden aria-label="My deck">
+    <h2>My deck</h2>
+    <div class="deck-tools">
+      <div class="field inline">
+        <label for="deck-name">Deck name</label>
+        <input id="deck-name" type="text" placeholder="My deck">
+      </div>
+      <div class="field inline">
+        <label for="deck-format">Format</label>
+        <select id="deck-format">
+          <option value="commander">Commander</option>
+          <option value="standard">Standard</option>
+          <option value="modern">Modern</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="rule-check" class="rule-check" role="status"></div>
+
+    <div class="checkoff-bar">
+      <div class="checkoff-head">
+        <strong>Checked off (owned / gathered)</strong>
+        <span id="checkoff-count">0 / 0 cards</span>
+      </div>
+      <div class="progress" role="progressbar" aria-label="Checked off progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="checkoff-progress">
+        <div class="progress-fill" id="checkoff-fill"></div>
+      </div>
+      <button type="button" id="clear-checks" class="secondary small">Clear / reset all checks</button>
+    </div>
+
+    <ul id="deck-list" class="deck-list"></ul>
+
+    <div class="share-row">
+      <button type="button" id="copy-deck" class="primary">Copy deck list</button>
+      <button type="button" id="share-deck" class="secondary">Share by Text / Messenger</button>
+    </div>
+    <p id="share-note" class="muted" aria-hidden="true"></p>
+  </section>
+
+  <!-- ============ IDEAS ============ -->
+  <section id="tab-ideas" class="panel" hidden aria-label="Deck ideas">
+    <h2>Commander deck ideas</h2>
+    <p class="muted">Pick the kind of deck you want to build. These come from live card data, ranked by how popular each card is with Commander players.</p>
+    <div class="theme-grid" id="theme-grid" role="group" aria-label="Deck themes"></div>
+    <h3 id="ideas-title" hidden>Suggestions</h3>
+    <div id="ideas-commanders" class="card-grid small"></div>
+    <div id="ideas-staples" class="card-grid small"></div>
+  </section>
+
+  <!-- ============ EASY ACCESS ============ -->
+  <section id="tab-access" class="panel" hidden aria-label="Easy access and lighting">
+    <h2>Easy access · lighting</h2>
+    <p class="muted">These settings save on this device. The app is always in a warm dark theme — there is no bright mode.</p>
+    <div class="access-list">
+      <button type="button" id="toggle-easy" class="access-btn" aria-pressed="true">✓ Easy view — step-by-step wording, extra choices hidden</button>
+      <button type="button" id="toggle-dark" class="access-btn" aria-pressed="true">🌙 Soft dark light — on</button>
+      <button type="button" id="toggle-text" class="access-btn" aria-pressed="false">🔍 Bigger text — off</button>
+      <button type="button" id="toggle-contrast" class="access-btn" aria-pressed="false">◐ Strong contrast — off</button>
+    </div>
+
+    <div class="update-panel">
+      <h3>Update through Muse</h3>
+      <p>Matthew — you can ask Muse in chat to update this app. Say something like <em>“add a feature to The Dark Board Assistant”</em> or <em>“fix the search in The Dark Board Assistant”</em> and Muse will update it.</p>
+    </div>
+  </section>
+
+  <footer class="disclaimer">
+    <p>Unofficial fan app. Not affiliated with or endorsed by Wizards of the Coast. Card data and prices via Scryfall.</p>
+  </footer>
+</main>
+
+<!-- ============ CARD VIEWER DIALOG ============ -->
+<div id="viewer" class="viewer" role="dialog" aria-modal="true" aria-labelledby="viewer-title" hidden>
+  <div class="viewer-box">
+    <button type="button" id="viewer-close" class="secondary">Close ✕</button>
+    <h2 id="viewer-title"></h2>
+    <div class="viewer-main">
+      <div class="viewer-image">
+        <img id="viewer-img" alt="">
+        <button type="button" id="viewer-flip" class="secondary small" hidden>Flip card ⟲</button>
+      </div>
+      <div class="viewer-info">
+        <p id="viewer-label" class="muted"></p>
+        <p id="viewer-price"></p>
+        <label for="viewer-printings" class="field-label">Pictures &amp; versions</label>
+        <select id="viewer-printings" size="8"></select>
+        <p id="viewer-version-detail" class="muted"></p>
+        <button type="button" id="viewer-add" class="primary big">+ Add this version to deck</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js" defer></script>
+</body>
+</html>
