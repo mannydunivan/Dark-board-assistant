@@ -17,7 +17,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
-const VERSION = '2.3';
+const VERSION = '2.4';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -116,6 +116,20 @@ function cleanCard(c) {
     cn: String(c.cn || '').slice(0, 30),
     price: String(c.price || '').slice(0, 20),
     priceNum: (typeof c.priceNum === 'number' && isFinite(c.priceNum) && c.priceNum >= 0) ? c.priceNum : null,
+    cmc: (typeof c.cmc === 'number' && isFinite(c.cmc) && c.cmc >= 0) ? c.cmc : null,
+    colors: Array.isArray(c.colors)
+      ? c.colors.filter((x) => typeof x === 'string' && /^[WUBRG]$/.test(x)).slice(0, 5)
+      : [],
+    maintype: String(c.maintype || '').slice(0, 30),
+    power: c.power === null || c.power === undefined ? null : String(c.power).slice(0, 10),
+    toughness: c.toughness === null || c.toughness === undefined ? null : String(c.toughness).slice(0, 10),
+    subtypes: Array.isArray(c.subtypes)
+      ? c.subtypes.filter((x) => typeof x === 'string').map((x) => x.slice(0, 40)).slice(0, 20)
+      : [],
+    keywords: Array.isArray(c.keywords)
+      ? c.keywords.filter((x) => typeof x === 'string').map((x) => x.slice(0, 60)).slice(0, 30)
+      : [],
+    statsOk: !!c.statsOk,
     img: String(c.img || '').slice(0, 2000),
     count: Math.max(1, Math.min(99, isNaN(n) ? 1 : n)),
     checked: !!c.checked,
@@ -145,7 +159,7 @@ async function scryfallFetch(url) {
   if (wait) await new Promise((r) => setTimeout(r, wait));
   lastCall = Date.now();
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.0 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.4 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('Scryfall returned ' + res.status);
@@ -354,6 +368,111 @@ app.get('/api/card/:id', async (req, res) => {
     res
       .status(e.status || 502)
       .json({ error: 'Card data is unavailable right now. Please try again in a moment.' });
+  }
+});
+
+// POST helper for Scryfall endpoints that need a JSON body (like
+// /cards/collection). Same politeness delay as scryfallFetch.
+async function scryfallPost(url, body) {
+  const now = Date.now();
+  const wait = Math.max(0, 80 - (now - lastCall));
+  if (wait) await new Promise((r) => setTimeout(r, wait));
+  lastCall = Date.now();
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'TheDarkBoardAssistant/2.4 (fan project)',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = new Error('Scryfall returned ' + res.status);
+    err.status = res.status === 404 ? 404 : 502;
+    throw err;
+  }
+  return res.json();
+}
+
+// The main card type word: the word before the '—' in the type line
+// (e.g. "Legendary Creature — Dragon" -> "Creature"), mapped to the
+// buckets the deck-stats charts use, else "Other".
+function mainTypeOf(card) {
+  const faces = card.card_faces || [];
+  const line = card.type_line || (faces[0] && faces[0].type_line) || '';
+  const before = line.split(/[—–-]/)[0].trim();
+  const words = before.split(/\s+/).filter(Boolean);
+  const last = words.length ? words[words.length - 1] : '';
+  const word = last.charAt(0).toUpperCase() + last.slice(1).toLowerCase();
+  const buckets = ['Creature', 'Instant', 'Sorcery', 'Artifact', 'Enchantment', 'Planeswalker', 'Land', 'Battle'];
+  return buckets.includes(word) ? word : 'Other';
+}
+
+function firstFace(card) {
+  const faces = card.card_faces || [];
+  return faces[0] || {};
+}
+
+// The small stat fields the deck-stats charts need for one Scryfall card.
+function statFieldsOf(card) {
+  const face = firstFace(card);
+  const cmc = typeof card.cmc === 'number' && isFinite(card.cmc) ? card.cmc
+    : (typeof face.cmc === 'number' && isFinite(face.cmc) ? face.cmc : null);
+  const colors = Array.isArray(card.colors) ? card.colors
+    : (Array.isArray(face.colors) ? face.colors : []);
+  const typeLine = card.type_line || face.type_line || '';
+  const after = typeLine.split(/[—–]/)[1] || '';
+  const subtypes = after.trim().split(/\s+/).filter(Boolean);
+  const power = card.power !== undefined && card.power !== null ? String(card.power)
+    : (face.power !== undefined && face.power !== null ? String(face.power) : null);
+  const toughness = card.toughness !== undefined && card.toughness !== null ? String(card.toughness)
+    : (face.toughness !== undefined && face.toughness !== null ? String(face.toughness) : null);
+  const keywords = Array.isArray(card.keywords) ? card.keywords
+    : (Array.isArray(face.keywords) ? face.keywords : []);
+  return {
+    cmc: cmc,
+    colors: colors.filter((c) => typeof c === 'string' && /^[WUBRG]$/.test(c)),
+    maintype: mainTypeOf(card),
+    power: power,
+    toughness: toughness,
+    subtypes: subtypes,
+    keywords: keywords.filter((k) => typeof k === 'string'),
+  };
+}
+
+// Bulk stat lookup for the deck-stats charts: the client sends Scryfall ids
+// for cards whose entries are missing stats, and gets back a map of
+// id -> {cmc, colors, maintype, power, toughness, subtypes, keywords}.
+// Scryfall takes at most 75 identifiers per call, so we chunk server-side.
+const collectionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-8',
+  message: { error: 'Too many requests. Please wait a moment and try again.' },
+});
+app.post('/api/cards/collection', collectionLimiter, async (req, res) => {
+  const ids = req.body && req.body.identifiers;
+  if (!Array.isArray(ids) || !ids.length) {
+    return res.status(400).json({ error: 'Send an array of card ids as "identifiers".' });
+  }
+  const clean = ids.filter((x) => typeof x === 'string' && x.trim()).slice(0, 300);
+  if (!clean.length) return res.status(400).json({ error: 'No valid card ids.' });
+  try {
+    const out = {};
+    for (let i = 0; i < clean.length; i += 75) {
+      const chunk = clean.slice(i, i + 75);
+      const data = await scryfallPost(SCRYFALL + '/cards/collection', {
+        identifiers: chunk.map((id) => ({ id: id })),
+      });
+      (data.data || []).forEach((card) => {
+        out[card.id] = statFieldsOf(card);
+      });
+    }
+    res.json({ cards: out });
+  } catch (e) {
+    res
+      .status(e.status || 502)
+      .json({ error: 'Card stats are unavailable right now. Please try again in a moment.' });
   }
 });
 
