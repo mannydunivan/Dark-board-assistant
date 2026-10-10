@@ -1,5 +1,5 @@
 'use strict';
-/* The Dark Board Assistant — frontend (v1.4) */
+/* The Dark Board Assistant — frontend (v2.0) */
 
 const $ = (s, el) => (el || document).querySelector(s);
 const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
@@ -36,6 +36,7 @@ let deck = JSON.parse(localStorage.getItem(DECK_KEY) || 'null') || {
 function saveDeck() {
   localStorage.setItem(DECK_KEY, JSON.stringify(deck));
   updateDeckPill();
+  scheduleServerSync(); // no-op unless logged in (v2.0)
 }
 
 // ---------- announcements ----------
@@ -528,7 +529,183 @@ $('#toggle-dark').addEventListener('click', () => { prefs.softDark = !prefs.soft
 $('#toggle-text').addEventListener('click', () => { prefs.biggerText = !prefs.biggerText; savePrefs(); applyPrefs(); });
 $('#toggle-contrast').addEventListener('click', () => { prefs.strongContrast = !prefs.strongContrast; savePrefs(); applyPrefs(); });
 
+// ---------- account (v2.0): optional sign-up / log-in ----------
+// When logged in, the working deck also saves to the account (debounced)
+// and loads from the account on start. Logged out, everything works
+// exactly as before: the deck saves in this browser only.
+let accountsOn = false;
+let me = null;            // {id, email} when logged in
+let serverDeckId = null;  // server deck the working deck syncs to
+let syncTimer = null;
+const MOVED_KEY = 'dba-moved';
+
+async function api(path, opts) {
+  const res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* not JSON */ }
+  return { ok: res.ok, status: res.status, data: data || {} };
+}
+
+function checksOf(d) {
+  const o = {};
+  (d.cards || []).forEach((c) => { if (c.checked) o[c.pid + '|' + (c.commander ? 'cmd' : 'x')] = true; });
+  return o;
+}
+
+function scheduleServerSync() {
+  if (!accountsOn || !me) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncDeckToServer, 1500);
+}
+
+async function syncDeckToServer() {
+  if (!accountsOn || !me) return;
+  clearTimeout(syncTimer);
+  const body = JSON.stringify({ name: deck.name, format: deck.format, cards: deck.cards, checks: checksOf(deck) });
+  if (!serverDeckId) {
+    const r = await api('/api/decks', { method: 'POST', body });
+    if (r.ok && r.data && r.data.id) { serverDeckId = r.data.id; announce('Deck saved to your account.'); }
+    else if (r.status === 401) { await silentLogout(); }
+    return;
+  }
+  const r = await api('/api/decks/' + encodeURIComponent(serverDeckId), { method: 'PUT', body });
+  if (r.status === 401) { await silentLogout(); return; }
+  if (r.status === 404) { serverDeckId = null; scheduleServerSync(); }
+}
+
+function loadDeckIntoUI(d) {
+  deck = {
+    name: d.name || 'My deck',
+    format: ['commander', 'standard', 'modern'].includes(d.format) ? d.format : 'commander',
+    cards: Array.isArray(d.cards) ? d.cards : [],
+  };
+  searchFormat = deck.format;
+  $('#deck-name').value = deck.name;
+  $('#deck-format').value = deck.format;
+  $$('.format-btn').forEach((b) => {
+    const on = b.dataset.format === deck.format;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  saveDeck();
+  renderDeck();
+}
+
+function acctError(msg) {
+  const n = $('#acct-error');
+  if (!msg) { n.hidden = true; n.textContent = ''; return; }
+  n.textContent = msg;
+  n.hidden = false;
+  announce(msg);
+}
+
+function updateAccountUI() {
+  const off = !accountsOn;
+  $('#account-off').hidden = !off;
+  $('#account-login').hidden = off || !!me;
+  $('#account-user').hidden = off || !me;
+  $('#save-account-btn').hidden = !(accountsOn && me);
+  if (me) $('#acct-who').textContent = me.email;
+}
+
+async function silentLogout() {
+  me = null; serverDeckId = null; clearTimeout(syncTimer);
+  updateAccountUI();
+}
+
+async function onLogin(user) {
+  me = user;
+  acctError(null);
+  $('#acct-email').value = '';
+  $('#acct-password').value = '';
+  const before = JSON.parse(JSON.stringify(deck)); // local deck before login (for the move offer)
+  updateAccountUI();
+  announce('Logged in as ' + user.email + '.');
+  try {
+    const r = await api('/api/decks');
+    if (r.ok && r.data.length) {
+      const full = await api('/api/decks/' + encodeURIComponent(r.data[0].id));
+      if (full.ok) {
+        serverDeckId = full.data.id;
+        loadDeckIntoUI({ name: full.data.name, format: full.data.format, cards: full.data.cards });
+      }
+    }
+  } catch (e) { /* stay on local deck */ }
+  // One-tap move of the pre-login local deck (non-destructive).
+  if (before.cards && before.cards.length && !localStorage.getItem(MOVED_KEY)) {
+    const row = $('#move-deck-row');
+    row.hidden = false;
+    $('#move-deck').onclick = async () => {
+      const r = await api('/api/decks', {
+        method: 'POST',
+        body: JSON.stringify({ name: before.name, format: before.format, cards: before.cards, checks: checksOf(before) }),
+      });
+      if (r.ok) {
+        localStorage.setItem(MOVED_KEY, '1');
+        row.hidden = true;
+        announce('Your deck was copied to your account. The copy on this device is still here too.');
+      } else {
+        announce('Could not move the deck right now. Please try again in a moment.');
+      }
+    };
+  }
+}
+
+async function doAuth(kind) {
+  acctError(null);
+  const email = $('#acct-email').value.trim();
+  const password = $('#acct-password').value;
+  if (!email || !password) { acctError('Please type your email and password first.'); return; }
+  const r = await api('/api/auth/' + kind, { method: 'POST', body: JSON.stringify({ email, password }) });
+  if (!r.ok) { acctError(r.data.error || 'Something went wrong. Please try again.'); return; }
+  await onLogin(r.data);
+}
+
+$('#acct-login').addEventListener('click', () => doAuth('login'));
+$('#acct-signup').addEventListener('click', () => doAuth('signup'));
+$('#acct-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') doAuth('login'); });
+
+$('#acct-logout').addEventListener('click', async () => {
+  await api('/api/auth/logout', { method: 'POST' });
+  await silentLogout();
+  $('#move-deck-row').hidden = true;
+  announce('Logged out. Your deck is still saved on this device.');
+});
+
+async function saveToAccountNow() {
+  if (!me) return;
+  await syncDeckToServer();
+  announce('Deck saved to your account.');
+}
+$('#save-to-account').addEventListener('click', saveToAccountNow);
+$('#save-account-btn').addEventListener('click', saveToAccountNow);
+
+async function initAccount() {
+  try {
+    const s = await api('/api/status');
+    accountsOn = !!(s.data && s.data.accounts);
+  } catch (e) { accountsOn = false; }
+  updateAccountUI();
+  if (!accountsOn) return;
+  try {
+    const m = await api('/api/auth/me');
+    if (m.ok) {
+      me = m.data;
+      updateAccountUI();
+      const r = await api('/api/decks');
+      if (r.ok && r.data.length) {
+        const full = await api('/api/decks/' + encodeURIComponent(r.data[0].id));
+        if (full.ok) {
+          serverDeckId = full.data.id;
+          loadDeckIntoUI({ name: full.data.name, format: full.data.format, cards: full.data.cards });
+        }
+      }
+    }
+  } catch (e) { /* stay logged out, local mode */ }
+}
+
 // ---------- init ----------
 applyPrefs();
 renderDeck();
 updateDeckPill();
+initAccount();
