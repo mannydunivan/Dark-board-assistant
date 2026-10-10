@@ -13,13 +13,14 @@
 <header class="app-header">
   <div class="header-row">
     <h1>The Dark Board Assistant</h1>
-    <span class="version-badge" aria-label="Version 1.4">v1.4</span>
+    <span class="version-badge" aria-label="Version 2.0">v2.0</span>
   </div>
   <nav class="tabs" aria-label="Main sections">
     <button type="button" class="tab active" data-tab="search" aria-pressed="true">Search cards</button>
     <button type="button" class="tab" data-tab="deck" aria-pressed="false">My deck <span id="deck-count" class="pill" aria-hidden="true"></span></button>
     <button type="button" class="tab" data-tab="ideas" aria-pressed="false">Deck ideas</button>
     <button type="button" class="tab" data-tab="access" aria-pressed="false">Easy access</button>
+    <button type="button" class="tab" data-tab="account" aria-pressed="false">Account</button>
   </nav>
 </header>
 
@@ -122,6 +123,7 @@
     <div class="share-row">
       <button type="button" id="copy-deck" class="primary">Copy deck list</button>
       <button type="button" id="share-deck" class="secondary">Share by Text / Messenger</button>
+      <button type="button" id="save-account-btn" class="secondary" hidden>Save to account</button>
     </div>
     <p id="share-note" class="muted" aria-hidden="true"></p>
   </section>
@@ -150,6 +152,46 @@
     <div class="update-panel">
       <h3>Update through Muse</h3>
       <p>Matthew — you can ask Muse in chat to update this app. Say something like <em>“add a feature to The Dark Board Assistant”</em> or <em>“fix the search in The Dark Board Assistant”</em> and Muse will update it.</p>
+    </div>
+  </section>
+
+  <!-- ============ ACCOUNT ============ -->
+  <section id="tab-account" class="panel" hidden aria-label="Account">
+    <h2>Account</h2>
+    <p class="muted">With an account, your deck saves to your account and follows you to any phone or computer.</p>
+
+    <div id="account-off" class="notice" hidden>
+      <p><strong>Accounts are turned off on this site right now.</strong></p>
+      <p>Your deck still saves on this device, just like before.</p>
+    </div>
+
+    <div id="account-login" hidden>
+      <div class="field">
+        <label for="acct-email">Email</label>
+        <input id="acct-email" type="email" autocomplete="email" placeholder="you@example.com">
+      </div>
+      <div class="field">
+        <label for="acct-password">Password</label>
+        <input id="acct-password" type="password" autocomplete="current-password" placeholder="At least 8 characters">
+      </div>
+      <p id="acct-error" class="error-text" role="alert" hidden></p>
+      <div class="share-row">
+        <button type="button" id="acct-login" class="primary">Log in</button>
+        <button type="button" id="acct-signup" class="secondary">Sign up</button>
+      </div>
+      <p class="muted">New here? Press <strong>Sign up</strong> to make an account with your email.</p>
+    </div>
+
+    <div id="account-user" hidden>
+      <p>Logged in as <strong id="acct-who"></strong></p>
+      <div id="move-deck-row" hidden>
+        <button type="button" id="move-deck" class="primary">Move my current deck to my account</button>
+        <p class="muted">This copies the deck on this device to your account. The copy on this device stays too.</p>
+      </div>
+      <div class="share-row">
+        <button type="button" id="save-to-account" class="primary">Save to account</button>
+        <button type="button" id="acct-logout" class="secondary">Log out</button>
+      </div>
     </div>
   </section>
 
