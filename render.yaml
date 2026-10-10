@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: dark-board-assistant
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
