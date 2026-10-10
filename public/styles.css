@@ -124,6 +124,13 @@ button { font-family: inherit; }
 
 /* ---------- cards ---------- */
 .results-info { margin: .8rem 0; color: var(--text-dim); }
+.basic-lands { margin: 1rem 0 .4rem; }
+.basic-lands h3 { margin: 0 0 .3rem; }
+.land-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
+.power-number { font-size: 2rem; margin: .4rem 0; }
+.power-meter { display: flex; gap: 4px; margin: .4rem 0 .8rem; }
+.power-meter .seg { width: 24px; height: 12px; border-radius: 3px; background: #332619; border: 1px solid #6b543a; }
+.power-meter .seg.on { background: var(--accent); border-color: var(--accent); }
 .card-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: .9rem; margin-top: .8rem;
