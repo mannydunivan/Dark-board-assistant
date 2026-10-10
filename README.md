@@ -41,6 +41,25 @@ The Deck tab also shows a **market price total** under the format checks:
 noted separately (e.g. "2 cards have no listed price"). The total is
 included when you copy or share the deck list.
 
+## Deck stats (v2.4)
+
+The Deck tab now has a **Deck stats** section with visual charts for the
+active deck, updating live as you add or remove cards: a **mana curve**
+(cost 0–6+), **colors** (white/blue/black/red/green/colorless), **card
+types**, **speed** (average mana cost of non-land cards plus an
+early/mid/late split), **creature size** (average power/toughness plus
+small/medium/big buckets), and **synergy hints** (your most common creature
+types and keywords). Below the charts you'll find a one-sentence summary of
+your deck, plain-language takeaways under each chart, a **Standouts** block
+(highest mana cost, priciest cards, most used keyword), and a short
+**Tips for your deck** list — all generated from your deck's real cards,
+with actual card names. Every chart also carries a text summary for screen
+readers, and all bars are labeled with their numbers.
+
+Cards added from search bring their stats with them. Decks saved before v2.4
+get their stats through a one-time automatic lookup when you open them
+(the server asks Scryfall for just the cards that are missing stats).
+
 ## Accounts (v2.0, optional)
 
 Set these two environment variables to turn on email/password accounts.
