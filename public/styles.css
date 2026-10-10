@@ -151,6 +151,8 @@ body.soft-dark .card img, body.soft-dark #viewer-img { filter: brightness(.82) s
 .rule-check { background: var(--surface); border: 2px solid var(--border); border-radius: var(--radius); padding: .7rem 1rem; margin: .8rem 0; }
 .rule-check .ok { color: var(--good); }
 .rule-check .no { color: var(--bad); font-weight: bold; }
+.deck-value { font-weight: bold; color: var(--accent); margin: .6rem 0; font-size: 1.05rem; }
+.deck-value:empty { display: none; }
 
 .checkoff-bar { background: var(--surface); border: 2px solid var(--border); border-radius: var(--radius); padding: .8rem 1rem; margin: .8rem 0; }
 .checkoff-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .4rem; }
