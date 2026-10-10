@@ -9,3 +9,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.18.0
+      # Optional: turn on email/password accounts (v2.0).
+      # Fill DATABASE_URL in the Render dashboard; SESSION_SECRET is generated.
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
