@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>The Dark Board Assistant</title>
 <meta name="description" content="Search Magic: The Gathering cards, see prices and pictures, and build Commander, Standard, or Modern decks.">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#1c1410">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Dark Board">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -13,7 +20,7 @@
 <header class="app-header">
   <div class="header-row">
     <h1>The Dark Board Assistant</h1>
-    <span class="version-badge" aria-label="Version 2.0">v2.0</span>
+    <span class="version-badge" aria-label="Version 2.1">v2.1</span>
   </div>
   <nav class="tabs" aria-label="Main sections">
     <button type="button" class="tab active" data-tab="search" aria-pressed="true">Search cards</button>
@@ -147,6 +154,11 @@
       <button type="button" id="toggle-dark" class="access-btn" aria-pressed="true">🌙 Soft dark light — on</button>
       <button type="button" id="toggle-text" class="access-btn" aria-pressed="false">🔍 Bigger text — off</button>
       <button type="button" id="toggle-contrast" class="access-btn" aria-pressed="false">◐ Strong contrast — off</button>
+    </div>
+
+    <div class="update-panel">
+      <h3>Add to your home screen</h3>
+      <p>Put this app on your phone like a regular app: on Android, open the browser menu (⋮) and tap <strong>Add to Home screen</strong>. On iPhone, tap the <strong>Share</strong> button and tap <strong>Add to Home Screen</strong>. It opens full-screen with its own icon.</p>
     </div>
 
     <div class="update-panel">
