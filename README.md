@@ -21,8 +21,45 @@ node server.js
 Open http://localhost:3000 (or whatever `PORT` is set to).
 
 The server proxies api.scryfall.com for card search, printings, and prices, so
-the browser never talks to Scryfall directly. Decks are saved in each visitor's
-own browser (localStorage) — nothing is stored on the server.
+the browser never talks to Scryfall directly.
+
+## Accounts (v2.0, optional)
+
+Set these two environment variables to turn on email/password accounts.
+Without them the app runs exactly as before: decks save in each visitor's
+own browser (localStorage) and the Account tab shows a short notice.
+
+- `DATABASE_URL` — connection string for a Postgres database. A free option
+  is Neon (neon.tech): make a free project and copy its connection string.
+- `SESSION_SECRET` — a long random string used to sign login sessions.
+  Generate one with `openssl rand -hex 32`. Never commit it to the repo.
+
+When both are set, visitors can sign up and log in from the Account tab;
+their decks save to their account and follow them across devices. When
+logged out, decks still save in the browser as before.
+
+## Deploy to Render (free)
+
+> Note: this repo is deployed on Render through the **public Git repository**
+> flow, which has **no auto-deploy**. After pushing code changes, open the
+> Render dashboard for the `dark-board-assistant` service and click
+> **Manual Deploy → Deploy latest commit**.
+
+Option A — with this repo on GitHub:
+1. Push the `dark-board-assistant` folder to a GitHub repo.
+2. In the Render dashboard, click **New → Web Service** and connect the repo.
+3. Render reads `render.yaml`: Node runtime, build command `npm install`,
+   start command `node server.js`, health check `/healthz`.
+4. Click **Create Web Service** and wait for the deploy to finish.
+
+To turn on accounts on Render: add `DATABASE_URL` and `SESSION_SECRET` in
+the service's **Environment** tab (generate the secret with
+`openssl rand -hex 32`), then redeploy.
+
+Option B — manual:
+1. In Render: **New → Web Service**, point it at your repo.
+2. Environment: **Node**. Build command: `npm install`. Start command: `node server.js`.
+3. Set health check path to `/healthz`. Deploy.
 
 ## Deploy to Render (free)
 
