@@ -17,7 +17,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
-const VERSION = '2.2';
+const VERSION = '2.3';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -115,6 +115,7 @@ function cleanCard(c) {
     set: String(c.set || '').slice(0, 20),
     cn: String(c.cn || '').slice(0, 30),
     price: String(c.price || '').slice(0, 20),
+    priceNum: (typeof c.priceNum === 'number' && isFinite(c.priceNum) && c.priceNum >= 0) ? c.priceNum : null,
     img: String(c.img || '').slice(0, 2000),
     count: Math.max(1, Math.min(99, isNaN(n) ? 1 : n)),
     checked: !!c.checked,
