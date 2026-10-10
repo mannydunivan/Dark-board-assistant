@@ -20,11 +20,11 @@
 <header class="app-header">
   <div class="header-row">
     <h1>The Dark Board Assistant</h1>
-    <span class="version-badge" aria-label="Version 2.2">v2.2</span>
+    <span class="version-badge" aria-label="Version 2.3">v2.3</span>
   </div>
   <nav class="tabs" aria-label="Main sections">
     <button type="button" class="tab active" data-tab="search" aria-pressed="true">Search cards</button>
-    <button type="button" class="tab" data-tab="deck" aria-pressed="false">My deck <span id="deck-count" class="pill" aria-hidden="true"></span></button>
+    <button type="button" class="tab" data-tab="deck" aria-pressed="false">My decks <span id="deck-count" class="pill" aria-hidden="true"></span></button>
     <button type="button" class="tab" data-tab="ideas" aria-pressed="false">Deck ideas</button>
     <button type="button" class="tab" data-tab="access" aria-pressed="false">Easy access</button>
     <button type="button" class="tab" data-tab="account" aria-pressed="false">Account</button>
@@ -95,8 +95,19 @@
   </section>
 
   <!-- ============ DECK ============ -->
-  <section id="tab-deck" class="panel" hidden aria-label="My deck">
-    <h2>My deck</h2>
+  <section id="tab-deck" class="panel" hidden aria-label="My decks">
+    <h2>My decks</h2>
+    <div class="deck-tools">
+      <div class="field inline">
+        <label for="deck-select">Choose a deck</label>
+        <select id="deck-select"></select>
+      </div>
+    </div>
+    <div class="share-row">
+      <button type="button" id="new-deck" class="secondary">New deck</button>
+      <button type="button" id="rename-deck" class="secondary">Rename</button>
+      <button type="button" id="delete-deck" class="secondary">Delete</button>
+    </div>
     <div class="deck-tools">
       <div class="field inline">
         <label for="deck-name">Deck name</label>
@@ -113,6 +124,7 @@
     </div>
 
     <div id="rule-check" class="rule-check" role="status"></div>
+    <p id="deck-value" class="deck-value" role="status"></p>
 
     <div class="checkoff-bar">
       <div class="checkoff-head">
@@ -193,8 +205,8 @@
     <div id="account-user" hidden>
       <p>Logged in as <strong id="acct-who"></strong></p>
       <div id="move-deck-row" hidden>
-        <button type="button" id="move-deck" class="primary">Move my current deck to my account</button>
-        <p class="muted">This copies the deck on this device to your account. The copy on this device stays too.</p>
+        <button type="button" id="move-deck" class="primary">Move my decks to my account</button>
+        <p class="muted">This copies the decks on this device to your account. The copies on this device stay too.</p>
       </div>
       <div class="share-row">
         <button type="button" id="save-to-account" class="primary">Save to account</button>
