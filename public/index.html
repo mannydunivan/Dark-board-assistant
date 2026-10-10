@@ -20,7 +20,7 @@
 <header class="app-header">
   <div class="header-row">
     <h1>The Dark Board Assistant</h1>
-    <span class="version-badge" aria-label="Version 2.4">v2.4</span>
+    <span class="version-badge" aria-label="Version 2.5">v2.5</span>
   </div>
   <nav class="tabs" aria-label="Main sections">
     <button type="button" class="tab active" data-tab="search" aria-pressed="true">Search cards</button>
@@ -85,6 +85,19 @@
 
       <button type="submit" class="primary big">Search</button>
     </form>
+
+    <div class="basic-lands">
+      <h3>Basic lands</h3>
+      <p class="muted">Find basic lands from any set — pick a land below. Add a set code above to narrow it to one set.</p>
+      <div class="land-row" role="group" aria-label="Basic land types">
+        <button type="button" class="secondary land-btn" data-land="plains"><span class="legend-dot" style="background:#e8dcc0"></span>Plains</button>
+        <button type="button" class="secondary land-btn" data-land="island"><span class="legend-dot" style="background:#5aa3e8"></span>Island</button>
+        <button type="button" class="secondary land-btn" data-land="swamp"><span class="legend-dot" style="background:#8d8d9e"></span>Swamp</button>
+        <button type="button" class="secondary land-btn" data-land="mountain"><span class="legend-dot" style="background:#e85a5a"></span>Mountain</button>
+        <button type="button" class="secondary land-btn" data-land="forest"><span class="legend-dot" style="background:#5ac878"></span>Forest</button>
+        <button type="button" class="secondary land-btn" data-land="wastes"><span class="legend-dot" style="background:#6e6e6e"></span>Wastes</button>
+      </div>
+    </div>
 
     <div id="results-info" class="results-info" aria-hidden="true"></div>
     <div id="results" class="card-grid"></div>
