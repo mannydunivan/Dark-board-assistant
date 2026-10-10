@@ -232,3 +232,18 @@ body:not(.easy-view) .easy-only { display: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* ---------- account (v2.0) ---------- */
+.notice {
+  background: var(--surface-2);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: .8rem 1rem;
+  margin: 1rem 0;
+}
+.notice p { margin: .3rem 0; }
+.error-text {
+  color: var(--bad);
+  font-weight: bold;
+  margin: .5rem 0;
+}
