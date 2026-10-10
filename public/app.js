@@ -359,12 +359,12 @@ function buildQuery() {
   return parts.join(' ') || 'f:' + searchFormat;
 }
 
-async function runSearch(page) {
-  const q = buildQuery();
+async function runSearch(page, custom) {
+  const q = custom ? custom.q : buildQuery();
   const params = new URLSearchParams({
-    q, order: 'name', dir: 'auto', page: String(page),
+    q, order: custom ? custom.order : 'name', dir: custom ? custom.dir : 'auto', page: String(page),
   });
-  if ($('#q-prints').checked) params.set('unique', 'prints');
+  if (custom ? custom.unique : $('#q-prints').checked) params.set('unique', 'prints');
   announce('Searching…');
   try {
     const res = await fetch('/api/search?' + params.toString());
@@ -375,18 +375,59 @@ async function runSearch(page) {
     hasMore = !!data.has_more;
     $('#pager').hidden = !(page > 1 || hasMore);
     $('#prev-page').disabled = page <= 1;
-    $('#results-info').textContent = (data.total_cards || 0) + ' card' + ((data.total_cards || 0) === 1 ? '' : 's') + ' found';
+    const n = data.total_cards || 0;
+    const countText = custom
+      ? n + ' version' + (n === 1 ? '' : 's') + ' found'
+      : n + ' card' + (n === 1 ? '' : 's') + ' found';
+    $('#results-info').textContent = custom ? custom.label + ' — ' + countText : countText;
     $('#results-info').setAttribute('aria-hidden', 'false');
-    announce((data.total_cards || 0) + ' cards found.');
+    announce(custom ? custom.label + ' — ' + countText + '.' : n + ' cards found.');
   } catch (e) {
     $('#results-info').textContent = 'Search failed. Check your connection and try again.';
     announce('Search failed.');
   }
 }
 
-$('#search-form').addEventListener('submit', (e) => { e.preventDefault(); runSearch(1); });
-$('#next-page').addEventListener('click', () => { if (hasMore) runSearch(searchPage + 1); });
-$('#prev-page').addEventListener('click', () => { if (searchPage > 1) runSearch(searchPage - 1); });
+$('#search-form').addEventListener('submit', (e) => { e.preventDefault(); activeCustom = null; runSearch(1); });
+$('#next-page').addEventListener('click', () => { if (hasMore) runSearch(searchPage + 1, activeCustom); });
+$('#prev-page').addEventListener('click', () => { if (searchPage > 1) runSearch(searchPage - 1, activeCustom); });
+
+// ---------- basic lands ----------
+const BASIC_LANDS = [
+  { name: 'Plains',   key: 'plains',   q: 't:basic t:plains' },
+  { name: 'Island',   key: 'island',   q: 't:basic t:island' },
+  { name: 'Swamp',    key: 'swamp',    q: 't:basic t:swamp' },
+  { name: 'Mountain', key: 'mountain', q: 't:basic t:mountain' },
+  { name: 'Forest',   key: 'forest',   q: 't:basic t:forest' },
+  { name: 'Wastes',   key: 'wastes',   q: 't:basic !"wastes"' },
+];
+let activeCustom = null;
+
+function basicLandQuery(land) {
+  let q = land.q;
+  const set = clean($('#q-set').value).toLowerCase();
+  if (set) q += ' set:' + set;
+  return q;
+}
+
+function landCustom(land) {
+  return {
+    q: basicLandQuery(land), order: 'set', dir: 'asc', unique: true,
+    label: 'Showing ' + land.name + ' printings',
+  };
+}
+
+async function runBasicLandSearch(land, page) {
+  activeCustom = landCustom(land);
+  await runSearch(page || 1, activeCustom);
+}
+
+$$('.land-btn').forEach((b) => {
+  b.addEventListener('click', () => {
+    const land = BASIC_LANDS.find((l) => l.key === b.dataset.land);
+    if (land) runBasicLandSearch(land, 1);
+  });
+});
 
 $('#more-filters-btn').addEventListener('click', () => {
   const open = $('#more-filters').hidden;
@@ -972,6 +1013,103 @@ function statChart(title, body, takeaway, caption) {
     (takeaway ? '<p class="stat-takeaway">' + takeaway + '</p>' : '') + '</div>';
 }
 
+// ---------- power estimate (1–10): honest, number-based, never a win prediction ----------
+function powerEstimate(st) {
+  if (st.total < 10) return null;
+  const factors = [];
+  // Speed: average mana cost of non-land cards.
+  if (st.speed.avg !== null && isFinite(st.speed.avg)) {
+    const a = st.speed.avg;
+    const score = Math.max(1, Math.min(10, Math.round(10 - ((a - 2.0) * 9) / 2.5)));
+    const pace = a < 2.5 ? "that's fairly fast." : a <= 3.5 ? "that's about average." : "that's on the slow side.";
+    factors.push({
+      name: 'Speed', score: score,
+      sentence: 'Your cards cost ' + a.toFixed(1) + ' mana on average — ' + pace,
+    });
+  }
+  // Consistency: land count vs ideal + cheap early plays.
+  {
+    const ideal = deck.format === 'commander' ? 37 : 24;
+    let score = 10;
+    const notes = [];
+    if (Math.abs(st.landCount - ideal) >= 6) {
+      score -= 3;
+      notes.push('only ' + st.landCount + ' lands — most ' + cap(deck.format) + ' decks want around ' + ideal);
+    }
+    const early = st.curve[1] + st.curve[2];
+    if (early < 8) {
+      score -= 2;
+      notes.push('only ' + early + ' card' + (early === 1 ? '' : 's') + ' costing 1–2 mana');
+    }
+    factors.push({
+      name: 'Consistency', score: Math.max(1, score),
+      sentence: notes.length
+        ? cap(notes.join('; ')) + '.'
+        : 'Your land count and early plays look solid.',
+    });
+  }
+  // Synergy: share of the top creature tribe, else top keyword share of all cards.
+  {
+    let score, sentence;
+    const tribe = st.tribes[0];
+    const kw = st.keywords[0];
+    if (tribe && st.creatureCopies > 0) {
+      const share = tribe.n / st.creatureCopies;
+      score = share >= 0.40 ? 9 : share >= 0.25 ? 7 : share >= 0.15 ? 5 : 3;
+      const how = share >= 0.40 ? 'very focused.' : share >= 0.25 ? "that's focused." : share >= 0.15 ? 'somewhat focused.' : 'fairly scattered — look for cards that share a type or ability.';
+      sentence = tribe.n + ' of your ' + st.creatureCopies + ' creatures ' +
+        (tribe.n === 1 ? 'is' : 'are') + ' ' + plural(tribe.name) + ' — ' + how;
+    } else if (kw && st.total > 0) {
+      const share = kw.n / st.total;
+      score = share >= 0.40 ? 9 : share >= 0.25 ? 7 : share >= 0.15 ? 5 : 3;
+      sentence = cap(kw.name) + ' shows up on ' + kw.n + ' of your ' + st.total +
+        ' cards — ' + (share >= 0.25 ? "that's focused." : 'fairly scattered — look for cards that share a type or ability.');
+    } else {
+      score = 3;
+      sentence = 'No clear shared creature type or keyword yet.';
+    }
+    factors.push({ name: 'Synergy', score: score, sentence: sentence });
+  }
+  // Curve: smoothness across buckets 1–4.
+  {
+    const empty = [1, 2, 3, 4].filter((b) => st.curve[b] === 0);
+    const score = Math.max(1, 10 - empty.length * 2);
+    factors.push({
+      name: 'Curve', score: score,
+      sentence: empty.length === 0
+        ? 'You have cards at every cost from 1 to 4 — smooth.'
+        : 'No cards costing ' + empty.join(', ') + ' — you may have quiet turns there.',
+    });
+  }
+  if (!factors.length) return null;
+  const overall = Math.max(1, Math.min(10,
+    Math.round(factors.reduce((n, f) => n + f.score, 0) / factors.length)));
+  return { overall: overall, factors: factors, partial: st.missing > 0, counted: st.total - st.missing, of: st.total };
+}
+
+function powerHTML(st) {
+  const p = powerEstimate(st);
+  if (!p) {
+    return '<div class="stat-chart"><h4>Power estimate</h4>' +
+      '<p class="muted">Add more cards for a power estimate.</p></div>';
+  }
+  let meter = '';
+  for (let i = 0; i < 10; i++) {
+    meter += '<span class="seg' + (i < p.overall ? ' on' : '') + '"></span>';
+  }
+  let html = '<div class="stat-chart"><h4>Power estimate</h4>' +
+    '<p class="muted small">An estimate from your deck\u2019s numbers — it can\u2019t measure your skill, your opponents, or surprise combos.</p>' +
+    '<p class="power-number"><strong>' + p.overall + '/10</strong></p>' +
+    '<div class="power-meter" role="img" aria-label="Power estimate ' + p.overall + ' out of 10">' + meter + '</div>' +
+    '<ul class="stat-list">' + p.factors.map((f) =>
+      '<li><strong>' + esc(f.name) + ': ' + f.score + '/10</strong> — ' + esc(f.sentence) + '</li>'
+    ).join('') + '</ul>';
+  if (p.partial) {
+    html += '<p class="muted small">Based on ' + p.counted + ' of ' + p.of + ' cards — some are missing stats.</p>';
+  }
+  return html + '</div>';
+}
+
 function synergyHTML(st, cards) {
   let html = '';
   const tribe = st.tribes;
@@ -1005,6 +1143,7 @@ function renderStats() {
     } else note.textContent = '';
   }
   let html = '<p class="deck-summary"><strong>' + esc(deckSummary(st)) + '</strong></p>';
+  html += powerHTML(st);
   html += statChart('Mana curve', manaCurveSVG(st), manaTakeaway(st), 'Lands are not counted.');
   html += statChart('Colors', colorsSVG(st), colorsTakeaway(st));
   html += statChart('Card types', typesSVG(st), typesTakeaway(st));
