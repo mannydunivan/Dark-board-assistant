@@ -17,7 +17,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
-const VERSION = '2.4';
+const VERSION = '2.5';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
