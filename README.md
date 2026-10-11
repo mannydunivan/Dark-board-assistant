@@ -101,6 +101,26 @@ instead.
 - Search forms now include a **Collector number** field, and mobile
   keyboards no longer autocorrect card names.
 
+## v2.7: photo import, land quantities, switch commander
+
+- **Import from photo.** The Deck tab has a new **Import from photo**
+  section. Take a picture of a written or printed card list — quantities
+  like "3x Sol Ring" or "Sol Ring x2" are understood — or a single card.
+  The app reads the photo (on your device, using Tesseract.js loaded only
+  when you use this feature), then shows a **review screen**: every line
+  is matched against real card data, and you can fix any name and retry
+  before adding. Add the found cards to the current deck or a new deck.
+  Works best with printed text or neat writing.
+- **Any amount of basic lands.** Basic lands (and cards whose rules text
+  says "a deck can have any number of cards named…", like Relentless
+  Rats) now show a **quantity stepper** next to **+ Add** in search
+  results, the card viewer, and deck ideas, so you can add 30 Swamps at
+  once. This also fixed a bug where Commander decks wrongly rejected a
+  second basic land.
+- **Switch commander in the deck list.** Every legendary creature in your
+  deck list now has a small **👑** button — tap it to make that card your
+  commander. The old commander stays in the deck as a regular card.
+
 ## Accounts (v2.0, optional)
 
 Set these two environment variables to turn on email/password accounts.
