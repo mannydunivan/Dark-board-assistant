@@ -17,7 +17,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
-const VERSION = '2.6';
+const VERSION = '2.7';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -131,6 +131,8 @@ function cleanCard(c) {
       : [],
     removal: (typeof c.removal === 'number' && isFinite(c.removal) && c.removal >= 0)
       ? Math.min(99, Math.floor(c.removal)) : 0,
+    unlimited: !!c.unlimited,
+    legendary: !!c.legendary,
     lethalKws: Array.isArray(c.lethalKws)
       ? c.lethalKws.filter((x) => typeof x === 'string').map((x) => x.slice(0, 30)).slice(0, 20)
       : [],
@@ -164,7 +166,7 @@ async function scryfallFetch(url) {
   if (wait) await new Promise((r) => setTimeout(r, wait));
   lastCall = Date.now();
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.6 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.7 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('Scryfall returned ' + res.status);
@@ -387,7 +389,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.6 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.7 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -438,6 +440,7 @@ function statFieldsOf(card) {
     cmc: cmc,
     colors: colors.filter((c) => typeof c === 'string' && /^[WUBRG]$/.test(c)),
     maintype: mainTypeOf(card),
+    legendary: /\bLegendary\b/i.test(typeLine),
     power: power,
     toughness: toughness,
     subtypes: subtypes,
@@ -495,7 +498,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.6 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.7 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
