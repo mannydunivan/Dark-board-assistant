@@ -21,7 +21,7 @@
   <p class="credit-line">Product brought to you by Dunivan&Wean</p>
   <div class="header-row">
     <h1>The Dark Board Assistant</h1>
-    <span class="version-badge" aria-label="Version 2.8">v2.8.1</span>
+    <span class="version-badge" aria-label="Version 2.9">v2.9</span>
   </div>
   <nav class="tabs" aria-label="Main sections">
     <button type="button" class="tab active" data-tab="search" aria-pressed="true">Search cards</button>
@@ -148,6 +148,37 @@
       <h3>Deck stats</h3>
       <p id="stats-note" class="muted" role="status"></p>
       <div id="stats-charts"></div>
+    </div>
+
+    <div class="update-panel" id="combo-panel">
+      <h3>Combo check</h3>
+      <p class="muted">Looks for famous infinite combos hiding in this deck — and tells you when you’re one card away from one. Uses the Commander Spellbook database.</p>
+      <div class="share-row">
+        <button type="button" id="check-combos" class="primary">Check for combos</button>
+      </div>
+      <div id="combo-out" aria-live="polite"></div>
+    </div>
+
+    <div class="update-panel" id="matchup-panel">
+      <h3>Deck vs Deck</h3>
+      <p class="muted">Pick two decks for a head-to-head projection: who wins how many games out of 10, and why.</p>
+      <div class="deck-tools">
+        <div class="field inline">
+          <label for="matchup-a">First deck</label>
+          <select id="matchup-a"></select>
+        </div>
+        <div class="field inline">
+          <label for="matchup-b">Second deck</label>
+          <select id="matchup-b"></select>
+        </div>
+      </div>
+      <div id="matchup-out" aria-live="polite"><p class="muted">Choose two decks above to compare them.</p></div>
+      <div class="share-row">
+        <button type="button" id="matchup-combos" class="secondary">Check combos for both</button>
+        <button type="button" id="rank-decks" class="secondary">Rank my decks</button>
+      </div>
+      <div id="matchup-combo-out" aria-live="polite"></div>
+      <div id="rank-out" aria-live="polite"></div>
     </div>
 
     <div class="checkoff-bar">
