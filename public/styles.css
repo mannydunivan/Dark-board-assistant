@@ -274,6 +274,8 @@ body:not(.easy-view) .easy-only { display: none; }
 }
 .photo-found { display: flex; gap: .8rem; align-items: center; margin: .6rem 0; }
 .photo-found img { width: 90px; border-radius: 8px; flex-shrink: 0; }
+.photo-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .35rem; align-items: center; }
+.photo-chips .chip { font-size: .85rem; padding: .25rem .6rem; }
 .qty-label { display: inline-flex; align-items: center; gap: .3rem; font-size: .9rem; white-space: nowrap; font-weight: normal; }
 .qty-input {
   width: 4rem; padding: .45rem; background: #14100b; color: var(--text);
