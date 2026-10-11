@@ -62,6 +62,11 @@ function backfillCard(c) {
   c.removal = (typeof c.removal === 'number' && isFinite(c.removal) && c.removal >= 0)
     ? Math.min(99, Math.floor(c.removal)) : 0;
   c.lethalKws = Array.isArray(c.lethalKws) ? c.lethalKws.filter((x) => typeof x === 'string') : [];
+  // Entries saved before v2.7 lack unlimited/legendary: mark them for the
+  // one-time stats backfill instead of guessing.
+  if (c.legendary === undefined || c.unlimited === undefined) c.statsOk = false;
+  c.unlimited = !!c.unlimited;
+  c.legendary = !!c.legendary;
   c.count = Number(c.count) > 0 ? Math.floor(Number(c.count)) : 1;
   c.checked = !!c.checked;
   c.commander = !!c.commander;
@@ -371,6 +376,33 @@ function legalityLine(card) {
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 function isBasicLand(card) { return /Basic Land/.test(card.type_line || ''); }
 
+// Cards like Relentless Rats whose rules text says a deck can have any
+// number of them: no copy limits in any format, just like basic lands.
+function allowsAnyNumber(card) {
+  if (isBasicLand(card)) return true;
+  const faces = card.card_faces || [];
+  const text = card.oracle_text || (faces[0] && faces[0].oracle_text) || '';
+  return /a deck can have any number of cards named/i.test(text);
+}
+
+// Quantity stepper for cards with no copy limit (basic lands and "a deck
+// can have any number" cards). Returns '' for everything else.
+function qtyStepperHTML(card) {
+  if (!allowsAnyNumber(card)) return '';
+  return '<label class="qty-label">Qty <input type="number" class="qty-input" min="1" max="99" value="1" ' +
+    'aria-label="How many ' + esc(card.name) + ' to add"></label>';
+}
+function qtyFromEl(scope) {
+  const el = scope.querySelector('.qty-input');
+  const n = el ? parseInt(el.value, 10) : 1;
+  return Math.max(1, Math.min(99, isNaN(n) ? 1 : n));
+}
+function viewerQty() {
+  if ($('#viewer-qty-wrap').hidden) return 1;
+  const n = parseInt($('#viewer-qty').value, 10);
+  return Math.max(1, Math.min(99, isNaN(n) ? 1 : n));
+}
+
 // Any legendary creature can be a commander (checks the front face too
 // for double-faced cards).
 function isLegendaryCreature(card) {
@@ -565,13 +597,14 @@ function renderCards(cards) {
       legalityLine(card) +
       '<div class="row"><button type="button" class="secondary view-btn">Pictures &amp; versions</button>' +
       '<button type="button" class="primary add-btn">+ Add</button>' +
+      qtyStepperHTML(card) +
       (isLegendaryCreature(card) ? '<button type="button" class="secondary cmd-btn">👑 Set as commander</button>' : '') + '</div>';
     const imgEl = d.querySelector('img');
     const open = () => openViewer(card);
     imgEl.addEventListener('click', open);
     imgEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
     d.querySelector('.view-btn').addEventListener('click', open);
-    d.querySelector('.add-btn').addEventListener('click', () => addCardToDeck(card, false));
+    d.querySelector('.add-btn').addEventListener('click', () => addCardToDeck(card, false, qtyFromEl(d)));
     const cmdBtn = d.querySelector('.cmd-btn');
     if (cmdBtn) cmdBtn.addEventListener('click', () => handleSetCommander(card, cmdBtn));
     grid.appendChild(d);
@@ -593,6 +626,7 @@ async function openViewer(card) {
   $('#viewer-img').alt = 'Card art: ' + card.name + ' (front face)';
   $('#viewer-flip').hidden = !backImgOf(card);
   $('#viewer-commander').hidden = !isLegendaryCreature(card);
+  $('#viewer-qty-wrap').hidden = !allowsAnyNumber(card);
   syncViewerFlipA11y();
   $('#viewer-label').textContent = (card.type_line || '') + ' — ' + (card.mana_cost || '');
   $('#viewer-price').textContent = priceOf(card);
@@ -630,6 +664,7 @@ function pickPrinting(i) {
   $('#viewer-img').alt = 'Card art: ' + p.name + ' (front face)';
   $('#viewer-flip').hidden = !backImgOf(p);
   $('#viewer-commander').hidden = !isLegendaryCreature(p);
+  $('#viewer-qty-wrap').hidden = !allowsAnyNumber(p);
   syncViewerFlipA11y();
   $('#viewer-label').textContent = p.set_name + ' (' + p.set.toUpperCase() + ' #' + p.collector_number + ')';
   $('#viewer-price').textContent = priceOf(p);
@@ -679,7 +714,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#vie
 $('#viewer-add').addEventListener('click', () => {
   const i = Number($('#viewer-printings').value || 0);
   const p = viewerPrintings[i] || viewerCard;
-  addCardToDeck(p, false);
+  addCardToDeck(p, false, viewerQty());
   $('#viewer').hidden = true;
 });
 $('#viewer-commander').addEventListener('click', (e) => {
@@ -1448,11 +1483,18 @@ async function maybeBackfillStats() {
         const s = r.data.cards[c.pid];
         if (s) {
           const extra = {};
-          if (typeof s.oracle_text === 'string' && s.oracle_text) {
-            const probe = { oracle_text: s.oracle_text, keywords: s.keywords };
+          const ot = (typeof s.oracle_text === 'string') ? s.oracle_text : '';
+          if (ot) {
+            const probe = { oracle_text: ot, keywords: s.keywords };
             extra.removal = removalCountOf(probe);
             extra.lethalKws = lethalKeywordsOf(probe);
           }
+          // "Any number" cards (Relentless Rats and friends) and basic
+          // lands have no copy limits. Old entries don't store their type
+          // line, so basic lands are recognized by name here.
+          extra.unlimited =
+            /a deck can have any number of cards named/i.test(ot) ||
+            /^(Plains|Island|Swamp|Mountain|Forest|Wastes)$/i.test(c.name);
           const merged = backfillCard(Object.assign({}, c, s, extra, { statsOk: true }));
           Object.keys(merged).forEach((k) => { c[k] = merged[k]; });
           applied++;
@@ -1466,30 +1508,61 @@ async function maybeBackfillStats() {
   renderStats();
 }
 
-function addCardToDeck(card, asCommander) {
+function addCardToDeck(card, asCommander, qty) {
+  qty = Math.max(1, Math.min(99, Math.floor(Number(qty) || 1)));
+  if (asCommander) qty = 1; // a commander is always a single copy
+  const unlimited = allowsAnyNumber(card);
   const entry = Object.assign({
     pid: card.id, name: card.name, set: (card.set || '').toUpperCase(),
     cn: card.collector_number || '', price: priceOf(card), priceNum: numPriceOf(card),
     img: imgOf(card), back: backImgOf(card),
     checked: false, count: 1, commander: !!asCommander,
+    unlimited: unlimited, legendary: isLegendaryCreature(card),
   }, statFieldsOf(card));
-  const basic = isBasicLand(card);
   const existing = deck.cards.find((c) => c.pid === entry.pid && c.commander === entry.commander);
 
-  if (deck.format === 'commander' && !basic && !asCommander && existing) {
+  if (deck.format === 'commander' && !unlimited && !asCommander && existing) {
     announce(card.name + ' is already in this Commander deck (singleton).');
     return;
   }
   if (existing) {
-    if (deck.format === 'commander') { announce(card.name + ' is already in this Commander deck (singleton).'); return; }
-    if (existing.count >= 4 && !basic) { announce('You already have 4 copies of ' + card.name + '.'); return; }
-    existing.count += 1;
+    // (Bug fix v2.7: the old code rejected a second basic land here in
+    // Commander. Unlimited cards — basics and "any number" cards — stack
+    // freely in every format.)
+    if (deck.format === 'commander' && !unlimited) { announce(card.name + ' is already in this Commander deck (singleton).'); return; }
+    existing.count = unlimited
+      ? Math.min(99, existing.count + qty)
+      : Math.min(4, existing.count + qty);
   } else {
+    if (deck.format === 'commander' && !unlimited && !asCommander) qty = 1;
+    entry.count = unlimited ? Math.min(99, qty) : Math.min(4, qty);
     deck.cards.push(entry);
   }
   saveDeck();
   renderDeck();
   announce(card.name + ' added to your deck.');
+}
+
+// Switch the commander from inside the deck list: the old commander stays
+// in the deck as a regular card, the new one takes the crown. If the new
+// commander had several copies, one copy becomes the commander and the rest
+// stay as a regular entry.
+function makeCommander(pid) {
+  const target = deck.cards.find((c) => c.pid === pid && !c.commander);
+  if (!target) return;
+  ensureCommanderFormat();
+  const old = deck.cards.find((c) => c.commander);
+  if (old) old.commander = false;
+  if (target.count > 1) {
+    target.count -= 1;
+    deck.cards.push(Object.assign({}, target, { commander: true, count: 1, checked: false }));
+  } else {
+    target.commander = true;
+  }
+  saveDeck();
+  renderDeck();
+  announce(target.name + ' is now your commander.' +
+    (old ? ' ' + old.name + ' is still in your deck as a regular card.' : ''));
 }
 
 function removeFromDeck(pid, commander) {
@@ -1510,7 +1583,7 @@ function ruleCheckLines() {
     lines.push(total === 100
       ? '<span class="ok">✓ 100 cards — Commander ready</span>'
       : '<span class="no">✗ ' + total + ' / 100 cards</span>');
-    const dupes = deck.cards.filter((c) => !c.commander && c.count > 1 && !/Basic Land/i.test(c.name));
+    const dupes = deck.cards.filter((c) => !c.commander && c.count > 1 && !c.unlimited && !/Basic Land/i.test(c.name));
     lines.push(dupes.length === 0
       ? '<span class="ok">✓ Singleton rule ok</span>'
       : '<span class="no">✗ Duplicates: ' + dupes.map((c) => esc(c.name)).join(', ') + '</span>');
@@ -1518,7 +1591,7 @@ function ruleCheckLines() {
     lines.push(total >= 60
       ? '<span class="ok">✓ ' + total + ' cards — minimum 60 met</span>'
       : '<span class="no">✗ ' + total + ' / 60 cards minimum</span>');
-    const bad = deck.cards.filter((c) => c.count > 4 && !/^(Plains|Island|Swamp|Mountain|Forest|Wastes)$/i.test(c.name));
+    const bad = deck.cards.filter((c) => c.count > 4 && !c.unlimited && !/^(Plains|Island|Swamp|Mountain|Forest|Wastes)$/i.test(c.name));
     lines.push(bad.length === 0
       ? '<span class="ok">✓ Max 4 copies rule ok</span>'
       : '<span class="no">✗ Too many copies: ' + bad.map((c) => esc(c.name)).join(', ') + '</span>');
@@ -1538,12 +1611,17 @@ function renderDeck() {
       '<span class="name">' + esc(c.name) + (c.commander ? ' 👑' : '') +
       '<small>' + c.set + ' #' + c.cn + ' · ' + c.price + '</small></span>' +
       '<span class="qty">' + (c.count > 1 ? c.count + '×' : '') + '</span>' +
+      (c.legendary && c.maintype === 'Creature' && !c.commander
+        ? '<button type="button" class="secondary small make-cmd" aria-label="Make ' + esc(c.name) + ' your commander">👑</button>'
+        : '') +
       '<button type="button" class="remove" aria-label="Remove ' + esc(c.name) + ' from deck">✕</button>';
     li.querySelector('input').addEventListener('change', (e) => {
       c.checked = e.target.checked;
       saveDeck();
       renderDeck();
     });
+    const mkBtn = li.querySelector('.make-cmd');
+    if (mkBtn) mkBtn.addEventListener('click', () => makeCommander(c.pid));
     li.querySelector('.remove').addEventListener('click', () => removeFromDeck(c.pid, c.commander));
     list.appendChild(li);
   });
@@ -1574,6 +1652,306 @@ $('#clear-checks').addEventListener('click', () => {
   saveDeck();
   renderDeck();
   announce('All check-offs cleared.');
+});
+
+// ---------- photo import (v2.7) ----------
+// Take a picture of a written/printed card list (or a single card), read it
+// with OCR, and add the cards to a deck. Tesseract.js loads lazily from a
+// pinned CDN only when this feature is used, so the first page load stays
+// light. It is NOT in the service-worker precache on purpose.
+const TESSERACT_CDN = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+let tesseractPromise = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (!tesseractPromise) {
+    tesseractPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = TESSERACT_CDN;
+      s.onload = () => (window.Tesseract
+        ? resolve(window.Tesseract)
+        : reject(new Error('The text reader did not start. Please try again.')));
+      s.onerror = () => reject(new Error('Could not load the text reader. Check your connection and try again.'));
+      document.head.appendChild(s);
+    });
+  }
+  return tesseractPromise;
+}
+
+let photoDataUrl = '';
+
+async function ocrImage(dataUrl, onProgress) {
+  const T = await loadTesseract();
+  const res = await T.recognize(dataUrl, 'eng', {
+    logger: (m) => {
+      if (m && m.status === 'recognizing text' && onProgress) onProgress(m.progress || 0);
+    },
+  });
+  return (res && res.data && res.data.text) || '';
+}
+
+// Keep the characters card names can contain; drop OCR junk.
+function cleanOcrLine(line) {
+  return String(line || '').replace(/[^A-Za-z0-9'\-, /×]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// Quantity parsing: "3 Sol Ring", "3x Sol Ring", "Sol Ring x3" (default 1).
+function parseQtyLine(line) {
+  let qty = 1, name = String(line || '').trim();
+  let m = /^(\d+)\s*[x×]?\s+(.+)$/i.exec(name);
+  if (m && m[2].trim()) { qty = parseInt(m[1], 10); name = m[2].trim(); }
+  else {
+    m = /^(.+?)\s*[x×]\s*(\d+)$/.exec(name);
+    if (m && m[1].trim()) { name = m[1].trim(); qty = parseInt(m[2], 10); }
+  }
+  return { qty: Math.max(1, Math.min(99, qty || 1)), name: name };
+}
+
+// Fuzzy card lookup through the existing /api/named proxy (?fuzzy= passes through).
+async function fuzzyCard(name) {
+  try {
+    const res = await fetch('/api/named?fuzzy=' + encodeURIComponent(name));
+    if (!res.ok) return null;
+    const d = await res.json();
+    return (d && d.id) ? d : null;
+  } catch (e) { return null; }
+}
+
+$('#photo-take').addEventListener('click', () => {
+  const f = $('#photo-file');
+  f.setAttribute('capture', 'environment');
+  f.click();
+});
+$('#photo-choose').addEventListener('click', () => {
+  const f = $('#photo-file');
+  f.removeAttribute('capture');
+  f.click();
+});
+$('#photo-file').addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    photoDataUrl = String(rd.result || '');
+    if (!photoDataUrl) {
+      $('#photo-stage').innerHTML = '<p class="error-text">Could not read that image. Please try another.</p>';
+      return;
+    }
+    $('#photo-img').src = photoDataUrl;
+    $('#photo-preview').hidden = false;
+    $('#photo-stage').innerHTML = '';
+    $('#photo-preview').scrollIntoView({ block: 'nearest' });
+    announce('Photo ready. Choose what is in the photo.');
+  };
+  rd.onerror = () => {
+    $('#photo-stage').innerHTML = '<p class="error-text">Could not read that image. Please try another.</p>';
+  };
+  rd.readAsDataURL(file);
+});
+
+function photoProgressHTML(msg) {
+  return '<p class="muted" role="status" id="ocr-status">' + esc(msg) + '</p>';
+}
+function setOcrProgress(pct) {
+  const el = $('#ocr-status');
+  if (el) el.textContent = 'Reading your photo… ' + Math.round(pct * 100) + '%';
+}
+
+// ----- list mode: photo of a written/printed list -----
+$('#photo-mode-list').addEventListener('click', async () => {
+  const stage = $('#photo-stage');
+  stage.innerHTML = photoProgressHTML('Loading text reader…');
+  let text = '';
+  try {
+    text = await ocrImage(photoDataUrl, setOcrProgress);
+  } catch (e) {
+    stage.innerHTML = '<p class="error-text">' + esc(e.message || 'Could not read the photo.') + '</p>';
+    return;
+  }
+  const merged = {}, order = [];
+  text.split('\n').forEach((raw) => {
+    const line = cleanOcrLine(raw);
+    if (line.length < 2) return;
+    const q = parseQtyLine(line);
+    if (!q.name) return;
+    const key = q.name.toLowerCase();
+    if (!merged[key]) { merged[key] = { name: q.name, qty: 0 }; order.push(key); }
+    merged[key].qty = Math.min(99, merged[key].qty + q.qty);
+  });
+  const items = order.map((k) => merged[k]);
+  if (!items.length) {
+    stage.innerHTML = '<p class="error-text">Could not read any card names from that photo. Try a clearer, well-lit picture.</p>';
+    return;
+  }
+  renderPhotoReview(items);
+});
+
+function paintPhotoRow(rec) {
+  const statusEl = rec.row.querySelector('.photo-status');
+  const imgEl = rec.row.querySelector('.photo-thumb');
+  const retryBtn = rec.row.querySelector('.photo-retry');
+  if (rec.card) {
+    imgEl.src = imgOf(rec.card);
+    imgEl.hidden = false;
+    statusEl.innerHTML = '✓ <strong>' + esc(rec.card.name) + '</strong> <span class="muted">(' +
+      esc((rec.card.set || '').toUpperCase()) + ' · ' + priceOf(rec.card) + ')</span>';
+    retryBtn.hidden = true;
+  } else {
+    imgEl.hidden = true;
+    imgEl.removeAttribute('src');
+    statusEl.textContent = 'Not found — fix the name and tap Retry.';
+    retryBtn.hidden = false;
+  }
+  updatePhotoButtons();
+}
+
+let photoRows = [];
+function updatePhotoButtons() {
+  const found = photoRows.filter((r) => r.card).length;
+  const b1 = $('#photo-add-current'), b2 = $('#photo-add-new');
+  if (b1) b1.disabled = !found;
+  if (b2) b2.disabled = !found;
+  const note = $('#photo-review-note');
+  if (note) {
+    note.textContent = found
+      ? found + ' of ' + photoRows.length + ' found.' +
+        (found < photoRows.length ? ' Lines not found will be skipped.' : '')
+      : 'Looking up cards…';
+  }
+}
+
+function photoFoundCards() {
+  return photoRows.filter((r) => r.card).map((r) => ({
+    card: r.card,
+    qty: Math.max(1, Math.min(99, parseInt(r.row.querySelector('.photo-qty').value, 10) || 1)),
+  }));
+}
+
+async function renderPhotoReview(items) {
+  const stage = $('#photo-stage');
+  photoRows = [];
+  stage.innerHTML =
+    '<h4>Review — fix any name that looks wrong, then tap Retry</h4>' +
+    '<div id="photo-review-list"></div>' +
+    '<p class="muted" id="photo-review-note" role="status">Looking up cards…</p>' +
+    '<div class="share-row">' +
+    '<button type="button" id="photo-add-current" class="primary" disabled>Add found cards to this deck</button>' +
+    '<button type="button" id="photo-add-new" class="secondary" disabled>Add found cards to a new deck</button>' +
+    '</div>';
+  const list = $('#photo-review-list');
+  items.forEach((it) => {
+    const row = document.createElement('div');
+    row.className = 'photo-row';
+    row.innerHTML =
+      '<img class="photo-thumb" alt="" hidden>' +
+      '<div class="photo-row-main">' +
+      '<input type="text" class="photo-name" value="' + esc(it.name) + '" aria-label="Card name" ' +
+      'autocorrect="off" autocapitalize="off" spellcheck="false" autocomplete="off">' +
+      '<span class="muted small photo-status">Looking up…</span></div>' +
+      '<label class="qty-label">Qty <input type="number" class="photo-qty qty-input" min="1" max="99" value="' + it.qty + '"></label>' +
+      '<button type="button" class="secondary small photo-retry" hidden>Retry</button>';
+    list.appendChild(row);
+    const rec = { row: row, card: null };
+    photoRows.push(rec);
+    row.querySelector('.photo-retry').addEventListener('click', async () => {
+      const name = clean(row.querySelector('.photo-name').value);
+      row.querySelector('.photo-status').textContent = 'Looking up…';
+      rec.card = name ? await fuzzyCard(name) : null;
+      paintPhotoRow(rec);
+    });
+  });
+  updatePhotoButtons();
+  for (const rec of photoRows) {
+    const name = clean(rec.row.querySelector('.photo-name').value);
+    rec.card = name ? await fuzzyCard(name) : null;
+    paintPhotoRow(rec);
+  }
+  $('#photo-add-current').addEventListener('click', () => {
+    const found = photoFoundCards();
+    const skipped = photoRows.length - found.length;
+    found.forEach((f) => addCardToDeck(f.card, false, f.qty));
+    stage.innerHTML = '<p>' + found.length + ' card' + (found.length === 1 ? '' : 's') +
+      ' added to ' + esc(deck.name) + '.' +
+      (skipped ? ' ' + skipped + ' line' + (skipped === 1 ? '' : 's') + ' not found and skipped.' : '') + '</p>';
+    announce(found.length + ' cards added to ' + deck.name + '.');
+    photoRows = [];
+  });
+  $('#photo-add-new').addEventListener('click', async () => {
+    const found = photoFoundCards();
+    if (!found.length) return;
+    let name = 'Imported ' + new Date().toLocaleDateString();
+    if (typeof prompt === 'function') {
+      const n = prompt('Name for the new deck:', name);
+      if (n === null) return;
+      name = n.trim() || name;
+    }
+    await createDeck();
+    deck.name = name;
+    syncDeckInputs();
+    saveDecks();
+    renderDeck();
+    const skipped = photoRows.length - found.length;
+    found.forEach((f) => addCardToDeck(f.card, false, f.qty));
+    stage.innerHTML = '<p>' + found.length + ' card' + (found.length === 1 ? '' : 's') +
+      ' added to new deck "' + esc(deck.name) + '".' +
+      (skipped ? ' ' + skipped + ' line' + (skipped === 1 ? '' : 's') + ' not found and skipped.' : '') + '</p>';
+    announce(found.length + ' cards added to new deck ' + deck.name + '.');
+    photoRows = [];
+  });
+}
+
+// ----- single-card mode: photo of one card -----
+$('#photo-mode-single').addEventListener('click', async () => {
+  const stage = $('#photo-stage');
+  stage.innerHTML = photoProgressHTML('Loading text reader…');
+  let text = '';
+  try {
+    text = await ocrImage(photoDataUrl, setOcrProgress);
+  } catch (e) {
+    stage.innerHTML = '<p class="error-text">' + esc(e.message || 'Could not read the photo.') + '</p>';
+    return;
+  }
+  const lines = text.split('\n').map(cleanOcrLine).filter((l) => l.length >= 3);
+  const guess = lines.length ? lines[0] : '';
+  stage.innerHTML =
+    '<h4>Is this the card?</h4>' +
+    '<div class="field"><label for="photo-single-name">Card name</label>' +
+    '<input id="photo-single-name" type="text" value="' + esc(guess) + '" ' +
+    'autocorrect="off" autocapitalize="off" spellcheck="false" autocomplete="off"></div>' +
+    '<div class="share-row"><button type="button" id="photo-single-lookup" class="primary">Look up</button></div>' +
+    '<div id="photo-single-result"></div>';
+  const doLookup = async () => {
+    const name = clean($('#photo-single-name').value);
+    const box = $('#photo-single-result');
+    if (!name) { box.innerHTML = '<p class="muted">Type the card name first.</p>'; return; }
+    box.innerHTML = '<p class="muted" role="status">Looking up…</p>';
+    announce('Looking up ' + name + '.');
+    const card = await fuzzyCard(name);
+    if (!card) {
+      box.innerHTML = '<p class="error-text">Could not find "' + esc(name) + '". Fix the spelling and try again.</p>';
+      return;
+    }
+    const unlimited = allowsAnyNumber(card);
+    box.innerHTML =
+      '<div class="photo-found"><img src="' + imgOf(card) + '" alt="Card art: ' + esc(card.name) + '">' +
+      '<div><strong>' + esc(card.name) + '</strong><br><span class="muted">' +
+      esc((card.set || '').toUpperCase()) + ' #' + esc(card.collector_number || '') + ' · ' + priceOf(card) +
+      '</span></div></div>' +
+      (unlimited ? '<label class="qty-label">Qty <input type="number" id="photo-single-qty" class="qty-input" min="1" max="99" value="1" aria-label="How many copies to add"></label>' : '') +
+      '<div class="share-row"><button type="button" id="photo-single-add" class="primary">+ Add to deck</button></div>';
+    $('#photo-single-add').addEventListener('click', () => {
+      let q = 1;
+      if (unlimited) {
+        const n = parseInt($('#photo-single-qty').value, 10);
+        q = Math.max(1, Math.min(99, isNaN(n) ? 1 : n));
+      }
+      addCardToDeck(card, false, q);
+      box.innerHTML = '<p>' + esc(card.name) + ' added to ' + esc(deck.name) + '.</p>';
+    });
+  };
+  $('#photo-single-lookup').addEventListener('click', doLookup);
+  $('#photo-single-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLookup(); });
+  if (guess) doLookup();
 });
 
 // ---------- share ----------
@@ -1717,7 +2095,8 @@ function ideaCard(card, isCommander) {
     '<h3>' + esc(card.name) + '</h3>' +
     '<p class="price">' + priceOf(card) + '</p>' +
     '<div class="row"><button type="button" class="secondary view-btn">Pictures</button>' +
-    '<button type="button" class="primary add-btn">' + (isCommander ? '👑 Commander' : '+ Add') + '</button></div>';
+    '<button type="button" class="primary add-btn">' + (isCommander ? '👑 Commander' : '+ Add') + '</button>' +
+    (!isCommander ? qtyStepperHTML(card) : '') + '</div>';
   const open = () => openViewer(card);
   const imgEl = d.querySelector('img');
   imgEl.addEventListener('click', open);
@@ -1725,7 +2104,7 @@ function ideaCard(card, isCommander) {
   d.querySelector('.view-btn').addEventListener('click', open);
   d.querySelector('.add-btn').addEventListener('click', () => {
     if (isCommander) ensureCommanderFormat();
-    addCardToDeck(card, isCommander);
+    addCardToDeck(card, isCommander, isCommander ? 1 : qtyFromEl(d));
   });
   return d;
 }
