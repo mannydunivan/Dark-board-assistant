@@ -1679,9 +1679,63 @@ function loadTesseract() {
 
 let photoDataUrl = '';
 
-async function ocrImage(dataUrl, onProgress) {
+function loadImgEl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not read that image. Please try another.'));
+    img.src = dataUrl;
+  });
+}
+
+// Preprocess a photo for OCR (canvas, no new dependencies):
+// - optional top-strip crop (a Magic card's name is always in the top ~18%)
+// - downscale giant photos to max 2000px wide (speed), upscale tiny ones
+// - grayscale + contrast stretch (fixes glare / uneven light)
+async function preprocessDataUrl(dataUrl, opts) {
+  opts = opts || {};
+  const img = await loadImgEl(dataUrl);
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  let sy = 0, sh = h;
+  if (opts.cropTop) sh = Math.max(1, Math.round(h * 0.18));
+  let scale = 1;
+  if (w > 2000) scale = 2000 / w;
+  else if (w < 900) scale = Math.min(2, 900 / w);
+  const cw = Math.max(1, Math.round(w * scale));
+  const ch = Math.max(1, Math.round(sh * scale));
+  const c = document.createElement('canvas');
+  c.width = cw;
+  c.height = ch;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, sy, w, sh, 0, 0, cw, ch);
+  const imgd = ctx.getImageData(0, 0, cw, ch);
+  const px = imgd.data;
+  let min = 255, max = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    const l = (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000;
+    if (l < min) min = l;
+    if (l > max) max = l;
+  }
+  const range = (max - min) || 1;
+  // Only stretch washed-out photos; clean scans already span the full range
+  // and stretching them amplifies JPEG noise into fake characters.
+  const stretch = (max - min) < 150;
+  for (let i = 0; i < px.length; i += 4) {
+    const l = (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000;
+    const v = stretch
+      ? Math.max(0, Math.min(255, Math.round(((l - min) / range) * 255)))
+      : Math.round(l);
+    px[i] = px[i + 1] = px[i + 2] = v;
+  }
+  ctx.putImageData(imgd, 0, 0);
+  return c.toDataURL('image/png');
+}
+
+async function ocrImage(dataUrl, onProgress, opts) {
   const T = await loadTesseract();
-  const res = await T.recognize(dataUrl, 'eng', {
+  const processed = await preprocessDataUrl(dataUrl, opts);
+  const res = await T.recognize(processed, 'eng', {
     logger: (m) => {
       if (m && m.status === 'recognizing text' && onProgress) onProgress(m.progress || 0);
     },
@@ -1692,6 +1746,105 @@ async function ocrImage(dataUrl, onProgress) {
 // Keep the characters card names can contain; drop OCR junk.
 function cleanOcrLine(line) {
   return String(line || '').replace(/[^A-Za-z0-9'\-, /×]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// Stricter name cleaning for lookup candidates: letters, spaces,
+// apostrophes, commas, hyphens — what Magic names use.
+function cleanOcrName(line) {
+  return String(line || '').replace(/[^A-Za-z'’,\- ]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// Ordered name candidates from OCR text: cleaned lines, longest first,
+// deduped. Lines under 3 chars or with fewer than 3 letters are dropped.
+function nameCandidates(text) {
+  const seen = new Set();
+  const out = [];
+  String(text || '').split('\n').forEach((raw) => {
+    const l = cleanOcrName(raw);
+    if (l.length < 3) return;
+    if (l.replace(/[^A-Za-z]/g, '').length < 3) return;
+    const k = l.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(l);
+  });
+  out.sort((a, b) => b.length - a.length);
+  return out;
+}
+
+// Extra candidates from the best line: first 4, 3, then 2 words
+// (OCR often appends mana-cost junk like "G U" to the name).
+function wordVariants(line) {
+  const words = String(line || '').split(' ').filter(Boolean);
+  const out = [];
+  [4, 3, 2].forEach((n) => {
+    if (words.length > n) {
+      const v = words.slice(0, n).join(' ');
+      if (v.length >= 3 && out.indexOf(v) < 0) out.push(v);
+    }
+  });
+  return out;
+}
+
+// Candidates for single-card mode: lines longest-first, with word
+// truncations of the best line tried right after it.
+function orderedPhotoCandidates(text, withVariants) {
+  const lines = nameCandidates(text);
+  if (!withVariants || !lines.length) return lines;
+  const out = [lines[0]];
+  wordVariants(lines[0]).forEach((v) => { if (out.indexOf(v) < 0) out.push(v); });
+  lines.slice(1).forEach((l) => { if (out.indexOf(l) < 0) out.push(l); });
+  return out;
+}
+
+// Try fuzzy lookup across candidates in order; first hit wins.
+// maxTries caps API calls per photo.
+async function fuzzyFirst(candidates, maxTries) {
+  let tries = 0;
+  for (const c of candidates) {
+    if (tries >= (maxTries || 8)) break;
+    tries++;
+    const card = await fuzzyCard(c);
+    if (card) return { card: card, name: c };
+  }
+  return null;
+}
+
+// "Did you mean…?" — autocomplete suggestions for a failed name.
+async function autocompleteNames(q) {
+  try {
+    const res = await fetch('/api/autocomplete?q=' + encodeURIComponent(q));
+    if (!res.ok) return [];
+    const d = await res.json();
+    return (d && Array.isArray(d.data) ? d.data : []).slice(0, 5);
+  } catch (e) { return []; }
+}
+
+async function fillChips(box, name, onPick) {
+  if (!box) return;
+  box.innerHTML = '';
+  if (!name) return;
+  const names = await autocompleteNames(name);
+  if (!box.isConnected || !names.length) return;
+  const label = document.createElement('span');
+  label.className = 'muted small';
+  label.textContent = 'Did you mean…?';
+  box.appendChild(label);
+  names.forEach((n) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'secondary small chip';
+    b.textContent = n;
+    b.addEventListener('click', () => onPick(n));
+    box.appendChild(b);
+  });
+}
+
+// Lookup for one photo-review name: the name, then shorter word-variants.
+async function lookupPhotoName(name) {
+  if (!name) return null;
+  const hit = await fuzzyFirst([name].concat(wordVariants(name)), 3);
+  return hit ? hit.card : null;
 }
 
 // Quantity parsing: "3 Sol Ring", "3x Sol Ring", "Sol Ring x3" (default 1).
@@ -1796,11 +1949,19 @@ function paintPhotoRow(rec) {
     statusEl.innerHTML = '✓ <strong>' + esc(rec.card.name) + '</strong> <span class="muted">(' +
       esc((rec.card.set || '').toUpperCase()) + ' · ' + priceOf(rec.card) + ')</span>';
     retryBtn.hidden = true;
+    const chipsBox = rec.row.querySelector('.photo-chips');
+    if (chipsBox) chipsBox.innerHTML = '';
   } else {
     imgEl.hidden = true;
     imgEl.removeAttribute('src');
-    statusEl.textContent = 'Not found — fix the name and tap Retry.';
+    statusEl.textContent = 'Not found — fix the name, tap Retry, or pick a suggestion.';
     retryBtn.hidden = false;
+    const failedName = clean(rec.row.querySelector('.photo-name').value);
+    fillChips(rec.row.querySelector('.photo-chips'), failedName, (pick) => {
+      if (!rec.row.isConnected) return;
+      rec.row.querySelector('.photo-name').value = pick;
+      rec.row.querySelector('.photo-retry').click();
+    });
   }
   updatePhotoButtons();
 }
@@ -1847,7 +2008,8 @@ async function renderPhotoReview(items) {
       '<div class="photo-row-main">' +
       '<input type="text" class="photo-name" value="' + esc(it.name) + '" aria-label="Card name" ' +
       'autocorrect="off" autocapitalize="off" spellcheck="false" autocomplete="off">' +
-      '<span class="muted small photo-status">Looking up…</span></div>' +
+      '<span class="muted small photo-status">Looking up…</span>' +
+      '<div class="photo-chips"></div></div>' +
       '<label class="qty-label">Qty <input type="number" class="photo-qty qty-input" min="1" max="99" value="' + it.qty + '"></label>' +
       '<button type="button" class="secondary small photo-retry" hidden>Retry</button>';
     list.appendChild(row);
@@ -1856,14 +2018,14 @@ async function renderPhotoReview(items) {
     row.querySelector('.photo-retry').addEventListener('click', async () => {
       const name = clean(row.querySelector('.photo-name').value);
       row.querySelector('.photo-status').textContent = 'Looking up…';
-      rec.card = name ? await fuzzyCard(name) : null;
+      rec.card = await lookupPhotoName(name);
       paintPhotoRow(rec);
     });
   });
   updatePhotoButtons();
   for (const rec of photoRows) {
     const name = clean(rec.row.querySelector('.photo-name').value);
-    rec.card = name ? await fuzzyCard(name) : null;
+    rec.card = await lookupPhotoName(name);
     paintPhotoRow(rec);
   }
   $('#photo-add-current').addEventListener('click', () => {
@@ -1904,33 +2066,34 @@ async function renderPhotoReview(items) {
 $('#photo-mode-single').addEventListener('click', async () => {
   const stage = $('#photo-stage');
   stage.innerHTML = photoProgressHTML('Loading text reader…');
-  let text = '';
+  // A Magic card's name is always in the top strip: OCR that first, then the
+  // full image only if nothing matches.
+  let rawLine = '', hit = null;
   try {
-    text = await ocrImage(photoDataUrl, setOcrProgress);
-  } catch (e) {
-    stage.innerHTML = '<p class="error-text">' + esc(e.message || 'Could not read the photo.') + '</p>';
-    return;
+    const cropText = await ocrImage(photoDataUrl, setOcrProgress, { cropTop: true });
+    const cands = orderedPhotoCandidates(cropText, true);
+    rawLine = cands.length ? cands[0] : '';
+    if (cands.length) hit = await fuzzyFirst(cands, 8);
+  } catch (e) { /* fall through to the full image */ }
+  if (!hit) {
+    try {
+      const fullText = await ocrImage(photoDataUrl, setOcrProgress, {});
+      const cands = orderedPhotoCandidates(fullText, true);
+      if (!rawLine && cands.length) rawLine = cands[0];
+      if (cands.length) hit = await fuzzyFirst(cands, 8);
+    } catch (e) { /* the form below still lets them type the name */ }
   }
-  const lines = text.split('\n').map(cleanOcrLine).filter((l) => l.length >= 3);
-  const guess = lines.length ? lines[0] : '';
+  const guess = hit ? hit.name : rawLine;
   stage.innerHTML =
     '<h4>Is this the card?</h4>' +
     '<div class="field"><label for="photo-single-name">Card name</label>' +
     '<input id="photo-single-name" type="text" value="' + esc(guess) + '" ' +
     'autocorrect="off" autocapitalize="off" spellcheck="false" autocomplete="off"></div>' +
+    (rawLine ? '<p class="muted small">We read: "' + esc(rawLine) + '"</p>' : '') +
     '<div class="share-row"><button type="button" id="photo-single-lookup" class="primary">Look up</button></div>' +
     '<div id="photo-single-result"></div>';
-  const doLookup = async () => {
-    const name = clean($('#photo-single-name').value);
+  const renderFound = (card) => {
     const box = $('#photo-single-result');
-    if (!name) { box.innerHTML = '<p class="muted">Type the card name first.</p>'; return; }
-    box.innerHTML = '<p class="muted" role="status">Looking up…</p>';
-    announce('Looking up ' + name + '.');
-    const card = await fuzzyCard(name);
-    if (!card) {
-      box.innerHTML = '<p class="error-text">Could not find "' + esc(name) + '". Fix the spelling and try again.</p>';
-      return;
-    }
     const unlimited = allowsAnyNumber(card);
     box.innerHTML =
       '<div class="photo-found"><img src="' + imgOf(card) + '" alt="Card art: ' + esc(card.name) + '">' +
@@ -1949,9 +2112,27 @@ $('#photo-mode-single').addEventListener('click', async () => {
       box.innerHTML = '<p>' + esc(card.name) + ' added to ' + esc(deck.name) + '.</p>';
     });
   };
+  const doLookup = async () => {
+    const name = clean($('#photo-single-name').value);
+    const box = $('#photo-single-result');
+    if (!name) { box.innerHTML = '<p class="muted">Type the card name first.</p>'; return; }
+    box.innerHTML = '<p class="muted" role="status">Looking up…</p>';
+    announce('Looking up ' + name + '.');
+    const card = await fuzzyCard(name);
+    if (!card) {
+      box.innerHTML = '<p class="error-text">Could not find "' + esc(name) + '".</p><div class="photo-chips"></div>';
+      await fillChips(box.querySelector('.photo-chips'), name, (pick) => {
+        const inp = $('#photo-single-name');
+        if (inp) { inp.value = pick; doLookup(); }
+      });
+      return;
+    }
+    renderFound(card);
+  };
   $('#photo-single-lookup').addEventListener('click', doLookup);
   $('#photo-single-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLookup(); });
-  if (guess) doLookup();
+  if (hit) renderFound(hit.card);
+  else if (guess) doLookup();
 });
 
 // ---------- share ----------
