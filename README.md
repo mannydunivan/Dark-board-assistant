@@ -83,6 +83,24 @@ numbers only: it can't measure your skill, your opponents, or surprise
 combos. Decks with fewer than 10 cards show a "add more cards" note
 instead.
 
+## v2.6: commanders, Battle rating, synergy suggestions
+
+- **Any legendary creature can be a commander.** Search results and the
+  card viewer now show a **👑 Set as commander** button on every legendary
+  creature. Tapping it switches the active deck to Commander format if
+  needed; if a commander is already set, the first tap asks you to tap
+  again to replace it.
+- **Battle rating.** Underneath the Power estimate, a second 1–10 block
+  scores **Power** (creature size and big threats), **Speed** (average mana
+  cost), **Lethality** (evasion and finisher abilities like flying and
+  trample), and **Destruction** (removal and interaction). Same honest
+  framing: an estimate from the deck's numbers, not a win prediction.
+- **"Find cards that work with a card"** in the Deck ideas tab. Type a card
+  name to see cards Commander players actually play alongside it
+  (via EDHREC data), with pictures, prices, and **+ Add** buttons.
+- Search forms now include a **Collector number** field, and mobile
+  keyboards no longer autocorrect card names.
+
 ## Accounts (v2.0, optional)
 
 Set these two environment variables to turn on email/password accounts.
