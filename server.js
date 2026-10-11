@@ -17,7 +17,8 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
-const VERSION = '2.8.1';
+const SPELLBOOK = 'https://backend.commanderspellbook.com';
+const VERSION = '2.9';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -169,7 +170,7 @@ async function scryfallFetch(url, retries) {
   let res;
   try {
     res = await fetch(url, {
-      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.8.1 (fan project)' },
+      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.9 (fan project)' },
     });
   } catch (e) {
     if (retries > 0) {
@@ -408,7 +409,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.8.1 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.9 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -517,7 +518,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.8.1 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.9 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
@@ -583,6 +584,106 @@ app.get('/api/synergy', synergyLimiter, async (req, res) => {
     res
       .status(e.status || 502)
       .json({ error: 'Suggestions are unavailable right now. Please try again in a moment.' });
+  }
+});
+
+// ---- combo lookup via Commander Spellbook (free community combo database) ----
+// POST /api/combos {cards: [names]} -> {ok, source:'spellbook', included, almostIncluded}
+// Spellbook's find-my-combos wants {main:[{card, quantity}], commanders:[]}.
+// ETIQUETTE (theirs): click-triggered only, cached server-side (1h), and on
+// their 429 we do NOT retry — we surface "busy" and let the user retry.
+// (The Scryfall retry logic in scryfallFetch must NOT apply here.)
+const comboCache = new Map();
+const COMBO_TTL_MS = 60 * 60 * 1000;
+function comboKey(names) {
+  return names.map((n) => n.toLowerCase().trim()).filter(Boolean).sort().join('|');
+}
+async function spellbookCombos(names) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    const res = await fetch(SPELLBOOK + '/find-my-combos/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'TheDarkBoardAssistant/2.9 (fan project)',
+      },
+      body: JSON.stringify({
+        main: names.map((n) => ({ card: n, quantity: 1 })),
+        commanders: [],
+      }),
+      signal: ctrl.signal,
+    });
+    if (res.status === 429) {
+      const e = new Error('Spellbook is busy');
+      e.status = 429;
+      throw e;
+    }
+    if (!res.ok) {
+      const e = new Error('Spellbook returned ' + res.status);
+      e.status = 502;
+      throw e;
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function shapeVariant(v, deckLower) {
+  const uses = ((v && v.uses) || [])
+    .map((u) => (u.card && u.card.name) || '')
+    .filter(Boolean);
+  const produces = ((v && v.produces) || [])
+    .map((p) => (p.feature && p.feature.name) || '')
+    .filter(Boolean);
+  const shaped = {
+    cards: uses,
+    produces: produces,
+    description: String((v && v.description) || '').slice(0, 600),
+  };
+  if (deckLower) {
+    shaped.missing = uses.filter((c) => !deckLower.has(c.toLowerCase()));
+  }
+  return shaped;
+}
+const comboLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many tries. Please wait a few minutes and try again.' },
+});
+app.post('/api/combos', comboLimiter, async (req, res) => {
+  const raw = req.body && req.body.cards;
+  if (!Array.isArray(raw) || !raw.length) {
+    return res.status(400).json({ error: 'Send an array of card names as "cards".' });
+  }
+  const names = [...new Set(raw.map((n) => String(n).trim()).filter(Boolean))].slice(0, 200);
+  if (!names.length) return res.status(400).json({ error: 'No valid card names.' });
+  const key = comboKey(names);
+  const hit = comboCache.get(key);
+  if (hit && Date.now() - hit.t < COMBO_TTL_MS) return res.json(hit.data);
+  try {
+    const data = await spellbookCombos(names);
+    const r = (data && data.results) || {};
+    const lower = new Set(names.map((n) => n.toLowerCase()));
+    const out = {
+      ok: true,
+      source: 'spellbook',
+      included: (r.included || []).map((v) => shapeVariant(v)),
+      // "One piece away": combos where exactly one card is missing.
+      almostIncluded: (r.almostIncluded || [])
+        .map((v) => shapeVariant(v, lower))
+        .filter((v) => v.missing.length === 1),
+    };
+    comboCache.set(key, { t: Date.now(), data: out });
+    if (comboCache.size > 200) comboCache.delete(comboCache.keys().next().value);
+    res.json(out);
+  } catch (e) {
+    if (e.status === 429) {
+      return res.status(429).json({ error: 'Combo lookup is busy right now. Try again in a moment.' });
+    }
+    res.status(502).json({ error: 'Combo lookup is unavailable right now.', fallback: true });
   }
 });
 
