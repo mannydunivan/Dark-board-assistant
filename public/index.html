@@ -18,9 +18,10 @@
 <a class="skip-link" href="#main">Skip to main content</a>
 
 <header class="app-header">
+  <p class="credit-line">Product brought to you by Dunivan&Wean</p>
   <div class="header-row">
     <h1>The Dark Board Assistant</h1>
-    <span class="version-badge" aria-label="Version 2.5">v2.5</span>
+    <span class="version-badge" aria-label="Version 2.6">v2.6</span>
   </div>
   <nav class="tabs" aria-label="Main sections">
     <button type="button" class="tab active" data-tab="search" aria-pressed="true">Search cards</button>
@@ -48,16 +49,16 @@
     <form id="search-form" class="search-form" autocomplete="off">
       <div class="field">
         <label for="q-name">Card name</label>
-        <input id="q-name" type="text" placeholder="e.g. Sol Ring" list="name-suggest">
+        <input id="q-name" type="text" placeholder="e.g. Sol Ring" list="name-suggest" autocorrect="off" autocapitalize="off" spellcheck="false">
         <datalist id="name-suggest"></datalist>
       </div>
       <div class="field">
         <label for="q-type">Creature type</label>
-        <input id="q-type" type="text" placeholder="e.g. Dragon">
+        <input id="q-type" type="text" placeholder="e.g. Dragon" autocorrect="off" autocapitalize="off" spellcheck="false" autocomplete="off">
       </div>
       <div class="field">
         <label for="q-ability">Ability / rules text</label>
-        <input id="q-ability" type="text" placeholder="e.g. flying, draw a card">
+        <input id="q-ability" type="text" placeholder="e.g. flying, draw a card" autocorrect="off" autocapitalize="off" spellcheck="false" autocomplete="off">
       </div>
       <fieldset class="field colors">
         <legend>Mana colors</legend>
@@ -74,7 +75,11 @@
       <div id="more-filters" class="more-filters" hidden>
         <div class="field">
           <label for="q-set">Set code</label>
-          <input id="q-set" type="text" placeholder="e.g. LTR">
+          <input id="q-set" type="text" placeholder="e.g. LTR" autocorrect="off" autocapitalize="off" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="q-cn">Collector number</label>
+          <input id="q-cn" type="text" inputmode="numeric" placeholder="e.g. 273" autocorrect="off" autocapitalize="off" spellcheck="false" autocomplete="off">
         </div>
         <div class="field">
           <label for="q-maxprice">Max price (USD)</label>
@@ -88,7 +93,7 @@
 
     <div class="basic-lands">
       <h3>Basic lands</h3>
-      <p class="muted">Find basic lands from any set — pick a land below. Add a set code above to narrow it to one set.</p>
+      <p class="muted">Find basic lands from any set — pick a land below. Add a set code or collector number above to narrow it to one printing.</p>
       <div class="land-row" role="group" aria-label="Basic land types">
         <button type="button" class="secondary land-btn" data-land="plains"><span class="legend-dot" style="background:#e8dcc0"></span>Plains</button>
         <button type="button" class="secondary land-btn" data-land="island"><span class="legend-dot" style="background:#5aa3e8"></span>Island</button>
@@ -124,7 +129,7 @@
     <div class="deck-tools">
       <div class="field inline">
         <label for="deck-name">Deck name</label>
-        <input id="deck-name" type="text" placeholder="My deck">
+        <input id="deck-name" type="text" placeholder="My deck" autocorrect="off" autocapitalize="off" spellcheck="false" autocomplete="off">
       </div>
       <div class="field inline">
         <label for="deck-format">Format</label>
@@ -174,6 +179,15 @@
     <h3 id="ideas-title" hidden>Suggestions</h3>
     <div id="ideas-commanders" class="card-grid small"></div>
     <div id="ideas-staples" class="card-grid small"></div>
+    <h3>Find cards that work with a card</h3>
+    <p class="muted">Type a card name to see cards that work well with it, based on what Commander players actually play together.</p>
+    <div class="row">
+      <input id="synergy-name" type="text" placeholder="e.g. Atla Palani, Nest Tender" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Card name for synergy suggestions">
+      <button type="button" id="synergy-btn" class="primary">Find cards</button>
+    </div>
+    <div id="synergy-results" class="card-grid small">
+      <p class="muted">Type a card name above to see cards that work well with it.</p>
+    </div>
   </section>
 
   <!-- ============ EASY ACCESS ============ -->
@@ -256,6 +270,7 @@
         <select id="viewer-printings" size="8"></select>
         <p id="viewer-version-detail" class="muted"></p>
         <button type="button" id="viewer-add" class="primary big">+ Add this version to deck</button>
+        <button type="button" id="viewer-commander" class="secondary" hidden>👑 Set as commander</button>
       </div>
     </div>
   </div>
