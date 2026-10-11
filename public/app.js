@@ -59,6 +59,9 @@ function backfillCard(c) {
   c.toughness = (c.toughness === null || c.toughness === undefined) ? null : String(c.toughness);
   c.subtypes = Array.isArray(c.subtypes) ? c.subtypes.filter((x) => typeof x === 'string') : [];
   c.keywords = Array.isArray(c.keywords) ? c.keywords.filter((x) => typeof x === 'string') : [];
+  c.removal = (typeof c.removal === 'number' && isFinite(c.removal) && c.removal >= 0)
+    ? Math.min(99, Math.floor(c.removal)) : 0;
+  c.lethalKws = Array.isArray(c.lethalKws) ? c.lethalKws.filter((x) => typeof x === 'string') : [];
   c.count = Number(c.count) > 0 ? Math.floor(Number(c.count)) : 1;
   c.checked = !!c.checked;
   c.commander = !!c.commander;
@@ -103,8 +106,38 @@ function statFieldsOf(card) {
     toughness: toughness,
     subtypes: subtypes,
     keywords: keywords.filter((k) => typeof k === 'string'),
+    removal: removalCountOf(card),
+    lethalKws: lethalKeywordsOf(card),
     statsOk: true,
   };
+}
+
+// Removal/interaction count for the Battle rating: how many times the card's
+// rules text destroys, exiles, deals damage, counters, or makes players
+// sacrifice. Capped at 3 per card.
+function removalCountOf(card) {
+  const face = (card.card_faces && card.card_faces[0]) || {};
+  const text = card.oracle_text || face.oracle_text || '';
+  const m = String(text).match(/\b(destroy|exile|damage|counter|sacrifice)\b/gi);
+  return Math.min(3, m ? m.length : 0);
+}
+
+// Evasion/finisher abilities for the Battle rating's Lethality factor.
+// Checks Scryfall keywords plus rules text for "can't be blocked".
+const LETHAL_KWS = ['flying', 'trample', 'menace', 'haste', 'deathtouch', 'double strike'];
+function lethalKeywordsOf(card) {
+  const face = (card.card_faces && card.card_faces[0]) || {};
+  const kws = Array.isArray(card.keywords) ? card.keywords
+    : (Array.isArray(face.keywords) ? face.keywords : []);
+  const text = String(card.oracle_text || face.oracle_text || '');
+  const found = [];
+  LETHAL_KWS.forEach((k) => {
+    if (kws.some((x) => String(x).toLowerCase() === k)) found.push(cap1(k));
+  });
+  if (/\bcan't be blocked\b|\bunblockable\b/i.test(text) && found.indexOf('Unblockable') === -1) {
+    found.push('Unblockable');
+  }
+  return found;
 }
 function blankDeck(name) {
   return { id: newId(), name: name || 'New deck', format: 'commander', cards: [] };
@@ -338,6 +371,62 @@ function legalityLine(card) {
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 function isBasicLand(card) { return /Basic Land/.test(card.type_line || ''); }
 
+// Any legendary creature can be a commander (checks the front face too
+// for double-faced cards).
+function isLegendaryCreature(card) {
+  const faces = card.card_faces || [];
+  const line = (card.type_line || '') + ' ' + ((faces[0] && faces[0].type_line) || '');
+  return /\bLegendary\b/i.test(line) && /\bCreature\b/i.test(line);
+}
+
+// Switch the active deck to Commander format (same as the Deck ideas tab).
+function ensureCommanderFormat() {
+  if (deck.format === 'commander') return;
+  deck.format = 'commander';
+  searchFormat = 'commander';
+  const df = $('#deck-format');
+  if (df) df.value = 'commander';
+  $$('.format-btn').forEach((b) => {
+    const on = b.dataset.format === 'commander';
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+}
+
+// Set a card as the deck's commander. If another commander is already set,
+// the first tap arms a confirm ("Tap again to replace …"), the second tap
+// replaces it. Returns true when the commander was set, false while arming.
+let commanderArmPid = null, commanderArmTimer = null;
+function handleSetCommander(card, btn) {
+  ensureCommanderFormat();
+  const current = deck.cards.find((c) => c.commander);
+  if (current && current.pid === card.id) {
+    announce(card.name + ' is already your commander.');
+    return true;
+  }
+  if (current && commanderArmPid !== card.id) {
+    commanderArmPid = card.id;
+    if (btn) {
+      if (btn.dataset.orig === undefined) btn.dataset.orig = btn.textContent;
+      btn.textContent = 'Tap again to replace';
+    }
+    announce('Tap again to replace ' + current.name + ' as commander.');
+    clearTimeout(commanderArmTimer);
+    commanderArmTimer = setTimeout(() => {
+      commanderArmPid = null;
+      if (btn && btn.isConnected && btn.dataset.orig !== undefined) btn.textContent = btn.dataset.orig;
+    }, 6000);
+    return false;
+  }
+  clearTimeout(commanderArmTimer);
+  commanderArmPid = null;
+  if (btn && btn.dataset.orig !== undefined) btn.textContent = btn.dataset.orig;
+  deck.cards = deck.cards.filter((c) => !c.commander);
+  addCardToDeck(card, true);
+  announce(card.name + ' is now your commander.');
+  return true;
+}
+
 // ---------- search ----------
 let searchPage = 1, hasMore = false;
 
@@ -353,6 +442,8 @@ function buildQuery() {
   if (colors) parts.push('c>=' + colors);
   const set = clean($('#q-set').value);
   if (set) parts.push('s:' + set.toLowerCase());
+  const cn = clean($('#q-cn').value);
+  if (/^\d+$/.test(cn)) parts.push('cn:' + cn);
   const maxp = parseFloat($('#q-maxprice').value);
   if (!isNaN(maxp)) parts.push('usd<=' + maxp);
   parts.push('f:' + searchFormat);
@@ -407,6 +498,8 @@ function basicLandQuery(land) {
   let q = land.q;
   const set = clean($('#q-set').value).toLowerCase();
   if (set) q += ' set:' + set;
+  const cn = clean($('#q-cn').value);
+  if (/^\d+$/.test(cn)) q += ' cn:' + cn;
   return q;
 }
 
@@ -471,13 +564,16 @@ function renderCards(cards) {
       '<p class="price">' + priceOf(card) + '</p>' +
       legalityLine(card) +
       '<div class="row"><button type="button" class="secondary view-btn">Pictures &amp; versions</button>' +
-      '<button type="button" class="primary add-btn">+ Add</button></div>';
+      '<button type="button" class="primary add-btn">+ Add</button>' +
+      (isLegendaryCreature(card) ? '<button type="button" class="secondary cmd-btn">👑 Set as commander</button>' : '') + '</div>';
     const imgEl = d.querySelector('img');
     const open = () => openViewer(card);
     imgEl.addEventListener('click', open);
     imgEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
     d.querySelector('.view-btn').addEventListener('click', open);
     d.querySelector('.add-btn').addEventListener('click', () => addCardToDeck(card, false));
+    const cmdBtn = d.querySelector('.cmd-btn');
+    if (cmdBtn) cmdBtn.addEventListener('click', () => handleSetCommander(card, cmdBtn));
     grid.appendChild(d);
   });
 }
@@ -494,8 +590,10 @@ async function openViewer(card) {
   viewerFace = 0;
   $('#viewer-title').textContent = card.name;
   $('#viewer-img').src = imgOf(card);
-  $('#viewer-img').alt = 'Card art: ' + card.name;
+  $('#viewer-img').alt = 'Card art: ' + card.name + ' (front face)';
   $('#viewer-flip').hidden = !backImgOf(card);
+  $('#viewer-commander').hidden = !isLegendaryCreature(card);
+  syncViewerFlipA11y();
   $('#viewer-label').textContent = (card.type_line || '') + ' — ' + (card.mana_cost || '');
   $('#viewer-price').textContent = priceOf(card);
   $('#viewer').hidden = false;
@@ -529,7 +627,10 @@ function pickPrinting(i) {
   if (!p) return;
   viewerFace = 0;
   $('#viewer-img').src = imgOf(p);
+  $('#viewer-img').alt = 'Card art: ' + p.name + ' (front face)';
   $('#viewer-flip').hidden = !backImgOf(p);
+  $('#viewer-commander').hidden = !isLegendaryCreature(p);
+  syncViewerFlipA11y();
   $('#viewer-label').textContent = p.set_name + ' (' + p.set.toUpperCase() + ' #' + p.collector_number + ')';
   $('#viewer-price').textContent = priceOf(p);
   $('#viewer-version-detail').textContent =
@@ -537,12 +638,40 @@ function pickPrinting(i) {
 }
 
 $('#viewer-printings').addEventListener('change', (e) => pickPrinting(Number(e.target.value)));
-$('#viewer-flip').addEventListener('click', () => {
+
+// Flip a double-faced card in the viewer. Tapping the card image does the
+// same as the "Flip card" button; the button stays for clarity.
+function syncViewerFlipA11y() {
+  const img = $('#viewer-img');
+  const flippable = !$('#viewer-flip').hidden;
+  if (flippable) {
+    img.tabIndex = 0;
+    img.setAttribute('role', 'button');
+    img.setAttribute('aria-label', 'Flip card — showing the ' + (viewerFace === 0 ? 'front' : 'back') +
+      ' face of ' + ($('#viewer-title').textContent || 'this card') + '. Activate to flip.');
+  } else {
+    img.tabIndex = -1;
+    img.removeAttribute('role');
+    img.removeAttribute('aria-label');
+  }
+}
+function flipViewer() {
+  if ($('#viewer').hidden || $('#viewer-flip').hidden) return;
   const p = viewerPrintings[Number($('#viewer-printings').value || 0)] || viewerCard;
   const back = backImgOf(p);
   if (!back) return;
   viewerFace = viewerFace === 0 ? 1 : 0;
-  $('#viewer-img').src = viewerFace === 0 ? imgOf(p) : back;
+  const img = $('#viewer-img');
+  img.src = viewerFace === 0 ? imgOf(p) : back;
+  const face = viewerFace === 0 ? 'front' : 'back';
+  img.alt = 'Card art: ' + (p.name || 'this card') + ' (' + face + ' face)';
+  syncViewerFlipA11y();
+  announce('Showing ' + face + ' face.');
+}
+$('#viewer-flip').addEventListener('click', () => flipViewer());
+$('#viewer-img').addEventListener('click', () => flipViewer());
+$('#viewer-img').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flipViewer(); }
 });
 $('#viewer-close').addEventListener('click', () => { $('#viewer').hidden = true; });
 $('#viewer').addEventListener('click', (e) => { if (e.target.id === 'viewer') $('#viewer').hidden = true; });
@@ -552,6 +681,11 @@ $('#viewer-add').addEventListener('click', () => {
   const p = viewerPrintings[i] || viewerCard;
   addCardToDeck(p, false);
   $('#viewer').hidden = true;
+});
+$('#viewer-commander').addEventListener('click', (e) => {
+  const i = Number($('#viewer-printings').value || 0);
+  const p = viewerPrintings[i] || viewerCard;
+  if (handleSetCommander(p, e.currentTarget)) $('#viewer').hidden = true;
 });
 
 // ---------- deck ----------
@@ -628,9 +762,10 @@ function computeStats(cards) {
   const types = {};
   let speedSum = 0, speedN = 0, early = 0, mid = 0, late = 0;
   let powSum = 0, powN = 0, touSum = 0, touN = 0;
-  let small = 0, medium = 0, big = 0, unknownPow = 0;
-  let creatureCopies = 0, spellCopies = 0, landCount = 0;
-  const tribes = {}, keywords = {};
+  let small = 0, medium = 0, big = 0, unknownPow = 0, bigThreats = 0;
+  let creatureCopies = 0, spellCopies = 0, landCount = 0, okNonLand = 0;
+  const tribes = {}, keywords = {}, lethalKws = {};
+  let lethalCreatures = 0, removalCards = 0;
   const seenPid = {};
   const expensive = [], priciest = [];
   ok.forEach((c) => {
@@ -641,7 +776,8 @@ function computeStats(cards) {
       if (typeof c.priceNum === 'number') priciest.push({ name: c.name, price: c.priceNum, n: n });
     }
     const isLand = c.maintype === 'Land';
-    if (isLand) { landCount += n; }
+    if (isLand) { landCount += n; } else { okNonLand += n; }
+    if (!isLand && (c.removal || 0) > 0) removalCards += n;
     else if (typeof c.cmc === 'number') {
       curve[c.cmc >= 6 ? 6 : Math.floor(c.cmc)] += n;
       speedSum += c.cmc * n; speedN += n;
@@ -661,9 +797,15 @@ function computeStats(cards) {
       if (pKnown) {
         powSum += p * n; powN += n;
         if (p <= 1) small += n; else if (p <= 3) medium += n; else big += n;
+        if (p >= 5) bigThreats += n;
       } else { unknownPow += n; }
       if (tKnown) { touSum += tv * n; touN += n; }
       (c.subtypes || []).forEach((s) => { tribes[s] = (tribes[s] || 0) + n; });
+      const lk = Array.isArray(c.lethalKws) ? c.lethalKws : [];
+      if (lk.length) {
+        lethalCreatures += n;
+        lk.forEach((k) => { lethalKws[k] = (lethalKws[k] || 0) + n; });
+      }
     } else if (!isLand) { spellCopies += n; }
     (c.keywords || []).forEach((k) => { keywords[k] = (keywords[k] || 0) + n; });
   });
@@ -679,6 +821,8 @@ function computeStats(cards) {
       small: small, medium: medium, big: big, unknown: unknownPow, creatures: creatureCopies,
     },
     creatureCopies: creatureCopies, spellCopies: spellCopies, landCount: landCount,
+    okNonLand: okNonLand, removalCards: removalCards, bigThreats: bigThreats,
+    lethal: { withLethal: lethalCreatures, byKeyword: topEntries(lethalKws, 5) },
     tribes: topEntries(tribes, 5), keywords: topEntries(keywords, 5),
     expensive: expensive, priciest: priciest,
   };
@@ -1110,6 +1254,99 @@ function powerHTML(st) {
   return html + '</div>';
 }
 
+// ---------- battle rating (1–10): Power, Speed, Lethality, Destruction ----------
+// Like the power estimate, this only reads the shared stats object — it never
+// changes the other charts. Honest and number-based, never a win prediction.
+function battleRating(st) {
+  if (st.total < 10) return null;
+  const factors = [];
+  // Power: raw battlefield threat from creature size.
+  {
+    let score, sentence;
+    if (st.creatureCopies > 0 && st.size.avgP !== null && isFinite(st.size.avgP)) {
+      const a = st.size.avgP;
+      score = a >= 4 ? 9 : a >= 3 ? 7 : a >= 2 ? 5 : 3;
+      if (st.bigThreats >= 5) score = Math.min(10, score + 1);
+      sentence = 'Your creatures average ' + a.toFixed(1) + ' power' +
+        (st.bigThreats > 0
+          ? ', including ' + st.bigThreats + ' big threat' + (st.bigThreats === 1 ? '' : 's') + ' (5+ power)'
+          : '') + '.';
+    } else {
+      score = 4;
+      sentence = 'No creatures — power measures battlefield threats.';
+    }
+    factors.push({ name: 'Power', score: score, sentence: sentence });
+  }
+  // Speed: average mana cost of non-land cards (same scale as Power estimate).
+  if (st.speed.avg !== null && isFinite(st.speed.avg)) {
+    const a = st.speed.avg;
+    const score = Math.max(1, Math.min(10, Math.round(10 - ((a - 2.0) * 9) / 2.5)));
+    const pace = a < 2.5 ? "that's fairly fast." : a <= 3.5 ? "that's about average." : "that's on the slow side.";
+    factors.push({
+      name: 'Speed', score: score,
+      sentence: 'Your cards cost ' + a.toFixed(1) + ' mana on average — ' + pace,
+    });
+  }
+  // Lethality: share of creatures with evasion or finisher abilities.
+  {
+    let score, sentence;
+    if (st.creatureCopies > 0) {
+      const share = st.lethal.withLethal / st.creatureCopies;
+      score = share >= 0.5 ? 9 : share >= 0.3 ? 7 : share >= 0.15 ? 5 : 3;
+      const top2 = st.lethal.byKeyword.slice(0, 2);
+      if (top2.length) {
+        sentence = top2.map((k) => k.name + ' (' + k.n + ')').join(' and ') +
+          (top2.length === 1 ? ' makes' : ' make') + ' your creatures hard to stop — ' +
+          st.lethal.withLethal + ' of ' + st.creatureCopies + ' creatures can finish games.';
+      } else {
+        sentence = 'None of your creatures have evasion or finisher abilities yet.';
+      }
+    } else {
+      score = 3;
+      sentence = 'No creatures to be lethal with yet.';
+    }
+    factors.push({ name: 'Lethality', score: score, sentence: sentence });
+  }
+  // Destruction: removal and interaction among non-land cards.
+  {
+    const nonLand = st.okNonLand;
+    const n = st.removalCards;
+    const share = nonLand > 0 ? n / nonLand : 0;
+    const score = share >= 0.15 ? 9 : share >= 0.10 ? 7 : share >= 0.05 ? 5 : 3;
+    factors.push({
+      name: 'Destruction', score: score,
+      sentence: n + ' of your ' + nonLand + ' non-land cards can destroy, exile, or counter threats.',
+    });
+  }
+  if (!factors.length) return null;
+  const overall = Math.max(1, Math.min(10,
+    Math.round(factors.reduce((n, f) => n + f.score, 0) / factors.length)));
+  return { overall: overall, factors: factors, partial: st.missing > 0, counted: st.total - st.missing, of: st.total };
+}
+
+function battleHTML(st) {
+  const p = battleRating(st);
+  if (!p) {
+    return '<div class="stat-chart"><h4>Battle rating</h4>' +
+      '<p class="muted">Add more cards for a battle rating.</p></div>';
+  }
+  let meter = '';
+  for (let i = 0; i < 10; i++) {
+    meter += '<span class="seg' + (i < p.overall ? ' on' : '') + '"></span>';
+  }
+  let html = '<div class="stat-chart"><h4>Battle rating</h4>' +
+    '<p class="muted small">An estimate from your deck\u2019s numbers — it can\u2019t measure your skill, your opponents, or surprise combos.</p>' +
+    '<p class="power-number"><strong>' + p.overall + '/10</strong></p>' +
+    '<div class="power-meter" role="img" aria-label="Battle rating ' + p.overall + ' out of 10">' + meter + '</div>' +
+    '<ul class="stat-list">' + p.factors.map((f) =>
+      '<li><strong>' + esc(f.name) + ': ' + f.score + '/10</strong> — ' + esc(f.sentence) + '</li>'
+    ).join('') + '</ul>';
+  if (p.partial) {
+    html += '<p class="muted small">Based on ' + p.counted + ' of ' + p.of + ' cards — some are missing stats.</p>';
+  }
+  return html + '</div>';
+}
+
 function synergyHTML(st, cards) {
   let html = '';
   const tribe = st.tribes;
@@ -1144,6 +1381,7 @@ function renderStats() {
   }
   let html = '<p class="deck-summary"><strong>' + esc(deckSummary(st)) + '</strong></p>';
   html += powerHTML(st);
+  html += battleHTML(st);
   html += statChart('Mana curve', manaCurveSVG(st), manaTakeaway(st), 'Lands are not counted.');
   html += statChart('Colors', colorsSVG(st), colorsTakeaway(st));
   html += statChart('Card types', typesSVG(st), typesTakeaway(st));
@@ -1209,7 +1447,13 @@ async function maybeBackfillStats() {
       missing.forEach((c) => {
         const s = r.data.cards[c.pid];
         if (s) {
-          const merged = backfillCard(Object.assign({}, c, s, { statsOk: true }));
+          const extra = {};
+          if (typeof s.oracle_text === 'string' && s.oracle_text) {
+            const probe = { oracle_text: s.oracle_text, keywords: s.keywords };
+            extra.removal = removalCountOf(probe);
+            extra.lethalKws = lethalKeywordsOf(probe);
+          }
+          const merged = backfillCard(Object.assign({}, c, s, extra, { statsOk: true }));
           Object.keys(merged).forEach((k) => { c[k] = merged[k]; });
           applied++;
         }
@@ -1434,6 +1678,37 @@ async function loadIdeas(theme, label) {
   }
 }
 
+// ---------- "cards that work with…" (EDHREC synergy) ----------
+async function loadSynergy() {
+  const name = clean($('#synergy-name').value);
+  const box = $('#synergy-results');
+  if (!name) {
+    box.innerHTML = '<p class="muted">Type a card name above to see cards that work well with it.</p>';
+    return;
+  }
+  box.innerHTML = '<p class="muted">Looking for cards that work with ' + esc(name) + '…</p>';
+  announce('Looking for cards that work with ' + name + '.');
+  try {
+    const r = await api('/api/synergy?name=' + encodeURIComponent(name));
+    if (!r.ok) {
+      box.innerHTML = '<p>' + esc((r.data && r.data.error) || 'Could not load suggestions right now.') + '</p>';
+      return;
+    }
+    const cards = (r.data && r.data.cards) || [];
+    if (!cards.length) {
+      box.innerHTML = '<p class="muted">No suggestions found for that card.</p>';
+      return;
+    }
+    box.innerHTML = '<h3 style="grid-column:1/-1">Cards that work well with ' + esc(name) + '</h3>';
+    cards.forEach((card) => box.appendChild(ideaCard(card, false)));
+    announce(cards.length + ' suggestions for ' + name + '.');
+  } catch (e) {
+    box.innerHTML = '<p>Could not load suggestions right now.</p>';
+  }
+}
+$('#synergy-btn').addEventListener('click', loadSynergy);
+$('#synergy-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadSynergy(); });
+
 function ideaCard(card, isCommander) {
   const d = document.createElement('div');
   d.className = 'card';
@@ -1449,16 +1724,7 @@ function ideaCard(card, isCommander) {
   imgEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
   d.querySelector('.view-btn').addEventListener('click', open);
   d.querySelector('.add-btn').addEventListener('click', () => {
-    if (isCommander && deck.format !== 'commander') {
-      deck.format = 'commander';
-      searchFormat = 'commander';
-      $('#deck-format').value = 'commander';
-      $$('.format-btn').forEach((b) => {
-        const on = b.dataset.format === 'commander';
-        b.classList.toggle('active', on);
-        b.setAttribute('aria-pressed', String(on));
-      });
-    }
+    if (isCommander) ensureCommanderFormat();
     addCardToDeck(card, isCommander);
   });
   return d;
