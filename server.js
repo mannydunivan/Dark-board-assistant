@@ -17,7 +17,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
-const VERSION = '2.8';
+const VERSION = '2.8.1';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -158,16 +158,35 @@ const cache = new Map();
 const TTL_MS = 10 * 60 * 1000; // 10 minutes
 let lastCall = 0;
 
-async function scryfallFetch(url) {
+async function scryfallFetch(url, retries) {
+  if (retries === undefined) retries = 3;
   const now = Date.now();
   const hit = cache.get(url);
   if (hit && now - hit.t < TTL_MS) return hit.data;
-  const wait = Math.max(0, 80 - (now - lastCall));
+  const wait = Math.max(0, 120 - (now - lastCall));
   if (wait) await new Promise((r) => setTimeout(r, wait));
   lastCall = Date.now();
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.8 (fan project)' },
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.8.1 (fan project)' },
+    });
+  } catch (e) {
+    if (retries > 0) {
+      await new Promise((r) => setTimeout(r, 800));
+      return scryfallFetch(url, retries - 1);
+    }
+    throw e;
+  }
+  // The card database sometimes throttles rapid lookups (429) or hiccups
+  // (5xx). Retry with backoff instead of surfacing "not found" to the user.
+  if (res.status === 429 || (res.status >= 500 && res.status < 600)) {
+    if (retries > 0) {
+      const backoff = [700, 2000, 5000][3 - retries] || 5000;
+      await new Promise((r) => setTimeout(r, backoff));
+      return scryfallFetch(url, retries - 1);
+    }
+  }
   if (!res.ok) {
     const err = new Error('Scryfall returned ' + res.status);
     err.status = res.status === 404 ? 404 : 502;
@@ -389,7 +408,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.8 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.8.1 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -498,7 +517,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.8 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.8.1 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
