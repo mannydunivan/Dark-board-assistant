@@ -1,7 +1,7 @@
 /* The Dark Board Assistant — service worker.
    Caches the app shell so "Add to Home Screen" works and the app opens fast.
    API calls (/api/*) always go to the network so card data and prices stay fresh. */
-const CACHE = 'dba-v2.6';
+const CACHE = 'dba-v2.7';
 const ASSETS = [
   '/',
   '/index.html',
