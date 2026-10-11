@@ -54,6 +54,7 @@ body.bigger-text { --fs: 20px; }
   position: sticky; top: 0; z-index: 20;
 }
 .header-row { display: flex; align-items: center; gap: .6rem; }
+.credit-line { margin: 0 0 .15rem; font-size: .8rem; color: var(--text-dim); }
 h1 { font-size: 1.4rem; margin: 0; }
 .version-badge {
   background: var(--accent); color: #1c1410; font-weight: bold;
