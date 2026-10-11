@@ -101,6 +101,35 @@ instead.
 - Search forms now include a **Collector number** field, and mobile
   keyboards no longer autocorrect card names.
 
+## v2.9: Deck vs Deck, opening hands, rankings, combo check
+
+- **Deck vs Deck.** A new section in the Deck tab compares any two of
+  your decks head-to-head. Five weighted categories — Speed, Threats,
+  Interaction, Opening hands, Synergy — produce a **"wins N out of 10"**
+  scale with a split bar (the numbers move with the decks; nothing is
+  fixed). Underneath, a **status sheet** explains in plain language how
+  each deck outcompetes the other, plus **"The fatal blow — by the
+  numbers"** for the projected winner: damage per swing, swings to
+  lethal, and hard-to-block threats, all computed from the deck's real
+  stats. An honest note says this is a numbers projection, not a
+  prediction of real games.
+- **Simulated opening hands.** Each matchup deals 1,000 shuffled 7-card
+  hands per deck (honoring card counts). A hand is "keepable" with 2–4
+  lands and a play by turn 3. You see a sample dealt hand per deck, a
+  **Re-deal** button, and each deck's keep rate.
+- **Rank my decks.** One tap runs every deck with 10+ cards against every
+  other deck (round-robin) and shows a leaderboard sorted by projected
+  wins, e.g. "Dragon Fire — 14W / 6L".
+- **Combo check.** A **Check for combos** button scans the active deck
+  against the Commander Spellbook database (~30,000 known combos) via a
+  new `/api/combos` server endpoint (click-triggered, cached server-side
+  for an hour, polite rate limits). It lists **complete combos**
+  ("Combo: Exquisite Blood + Sanguine Bond → Infinite life loss") and
+  **one-piece-away** combos with a **Find this card** button that jumps
+  to search. If Spellbook is unreachable, a built-in list of famous
+  combos is used instead. The matchup's status sheet gains a "Combo
+  edge" bullet for decks with a complete combo already checked.
+
 ## v2.8: sharper photo import
 
 - **Smarter photo reading.** Before reading, the app now cleans up your
