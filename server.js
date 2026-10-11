@@ -17,7 +17,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
-const VERSION = '2.5';
+const VERSION = '2.6';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -129,6 +129,11 @@ function cleanCard(c) {
     keywords: Array.isArray(c.keywords)
       ? c.keywords.filter((x) => typeof x === 'string').map((x) => x.slice(0, 60)).slice(0, 30)
       : [],
+    removal: (typeof c.removal === 'number' && isFinite(c.removal) && c.removal >= 0)
+      ? Math.min(99, Math.floor(c.removal)) : 0,
+    lethalKws: Array.isArray(c.lethalKws)
+      ? c.lethalKws.filter((x) => typeof x === 'string').map((x) => x.slice(0, 30)).slice(0, 20)
+      : [],
     statsOk: !!c.statsOk,
     img: String(c.img || '').slice(0, 2000),
     count: Math.max(1, Math.min(99, isNaN(n) ? 1 : n)),
@@ -159,7 +164,7 @@ async function scryfallFetch(url) {
   if (wait) await new Promise((r) => setTimeout(r, wait));
   lastCall = Date.now();
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.4 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.6 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('Scryfall returned ' + res.status);
@@ -382,7 +387,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.4 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.6 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -437,6 +442,9 @@ function statFieldsOf(card) {
     toughness: toughness,
     subtypes: subtypes,
     keywords: keywords.filter((k) => typeof k === 'string'),
+    // Rules text so the client can count removal/interaction and spot
+    // evasion abilities on cards saved before v2.6 (one-time backfill).
+    oracle_text: String(card.oracle_text || face.oracle_text || '').slice(0, 4000),
   };
 }
 
@@ -473,6 +481,86 @@ app.post('/api/cards/collection', collectionLimiter, async (req, res) => {
     res
       .status(e.status || 502)
       .json({ error: 'Card stats are unavailable right now. Please try again in a moment.' });
+  }
+});
+
+// "Cards that work with…" — synergy suggestions powered by EDHREC's public
+// JSON (what Commander players actually play alongside a card). The server
+// fetches EDHREC's top cards for the named card, then resolves them to full
+// Scryfall card objects so the client can reuse its normal card rendering.
+function slugify(name) {
+  return String(name || '').toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+async function edhrecFetch(url) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.6 (fan project)' },
+  });
+  if (!res.ok) {
+    const err = new Error('EDHREC returned ' + res.status);
+    // EDHREC answers unknown cards with 403 (AccessDenied), not 404.
+    err.status = (res.status === 404 || res.status === 403) ? 404 : 502;
+    throw err;
+  }
+  return res.json();
+}
+const synergyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many tries. Please wait a few minutes and try again.' },
+});
+app.get('/api/synergy', synergyLimiter, async (req, res) => {
+  const name = (req.query.name || '').trim().slice(0, 120);
+  if (!name) return res.status(400).json({ error: 'Type a card name first.' });
+  const slug = slugify(name);
+  if (!slug) return res.status(400).json({ error: 'That card name does not look right.' });
+  try {
+    let ed = null;
+    for (const section of ['cards', 'commanders']) {
+      try {
+        ed = await edhrecFetch('https://json.edhrec.com/pages/' + section + '/' + slug + '.json');
+        break;
+      } catch (e) {
+        if (e.status !== 404) throw e;
+      }
+    }
+    if (!ed) {
+      return res.status(404).json({ error: 'Could not find synergy data for "' + name + '". Check the spelling.' });
+    }
+    const lists = (((ed.container || {}).json_dict || {}).cardlists) || [];
+    const byTag = {};
+    lists.forEach((l) => { if (l && l.tag && !byTag[l.tag]) byTag[l.tag] = l; });
+    const names = [];
+    const seen = {};
+    const take = (tag) => {
+      const l = byTag[tag];
+      if (!l || !Array.isArray(l.cardviews)) return;
+      l.cardviews.forEach((cv) => {
+        const n = cv && cv.name;
+        if (!n || seen[n.toLowerCase()]) return;
+        seen[n.toLowerCase()] = true;
+        names.push(n);
+      });
+    };
+    ['highsynergy', 'topsynergy', 'topcards', 'creatures', 'instants', 'sorceries',
+     'utilityartifacts', 'enchantments', 'manaartifacts'].forEach(take);
+    const picked = names
+      .filter((n) => n.toLowerCase() !== name.toLowerCase())
+      .slice(0, 12);
+    if (!picked.length) {
+      return res.status(404).json({ error: 'No suggestions found for that card.' });
+    }
+    const data = await scryfallPost(SCRYFALL + '/cards/collection', {
+      identifiers: picked.map((n) => ({ name: n })),
+    });
+    res.json({ cards: data.data || [] });
+  } catch (e) {
+    res
+      .status(e.status || 502)
+      .json({ error: 'Suggestions are unavailable right now. Please try again in a moment.' });
   }
 });
 
