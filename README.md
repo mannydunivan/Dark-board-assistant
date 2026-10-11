@@ -101,6 +101,16 @@ instead.
 - Search forms now include a **Collector number** field, and mobile
   keyboards no longer autocorrect card names.
 
+## v2.8: sharper photo import
+
+- **Smarter photo reading.** Before reading, the app now cleans up your
+  photo automatically (straightens contrast, fixes glare) and, for a
+  single card, reads the **name strip at the top of the card first**.
+  When a name isn't found, you get tappable **"Did you mean…?"**
+  suggestions instead of a dead end, and single-card mode shows you what
+  the app read so you can fix it. Tip: hold steady, fill the frame with
+  the card or list, and avoid glare.
+
 ## v2.7: photo import, land quantities, switch commander
 
 - **Import from photo.** The Deck tab has a new **Import from photo**
