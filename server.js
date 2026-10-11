@@ -17,7 +17,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
-const VERSION = '2.7';
+const VERSION = '2.8';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -166,7 +166,7 @@ async function scryfallFetch(url) {
   if (wait) await new Promise((r) => setTimeout(r, wait));
   lastCall = Date.now();
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.7 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.8 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('Scryfall returned ' + res.status);
@@ -389,7 +389,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.7 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.8 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -498,7 +498,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.7 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.8 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
