@@ -21,7 +21,7 @@
   <p class="credit-line">Product brought to you by Dunivan&Wean</p>
   <div class="header-row">
     <h1>The Dark Board Assistant</h1>
-    <span class="version-badge" aria-label="Version 2.6">v2.6</span>
+    <span class="version-badge" aria-label="Version 2.7">v2.7</span>
   </div>
   <nav class="tabs" aria-label="Main sections">
     <button type="button" class="tab active" data-tab="search" aria-pressed="true">Search cards</button>
@@ -161,6 +161,25 @@
       <button type="button" id="clear-checks" class="secondary small">Clear / reset all checks</button>
     </div>
 
+    <div class="update-panel" id="photo-import">
+      <h3>Import from photo</h3>
+      <p class="muted">Take a picture of a written or printed card list — or a single card — and add it to a deck. Works best with printed text or neat writing. You'll review every card before anything is added.</p>
+      <div class="share-row">
+        <button type="button" id="photo-take" class="primary">📷 Take photo</button>
+        <button type="button" id="photo-choose" class="secondary">🖼 Choose image</button>
+        <input type="file" id="photo-file" accept="image/*" hidden>
+      </div>
+      <div id="photo-preview" hidden>
+        <img id="photo-img" alt="Preview of the photo you chose">
+        <p><strong>What's in this photo?</strong></p>
+        <div class="share-row">
+          <button type="button" id="photo-mode-list" class="secondary">📝 A list of cards</button>
+          <button type="button" id="photo-mode-single" class="secondary">🃏 A single card</button>
+        </div>
+      </div>
+      <div id="photo-stage" aria-live="polite"></div>
+    </div>
+
     <ul id="deck-list" class="deck-list"></ul>
 
     <div class="share-row">
@@ -270,6 +289,7 @@
         <select id="viewer-printings" size="8"></select>
         <p id="viewer-version-detail" class="muted"></p>
         <button type="button" id="viewer-add" class="primary big">+ Add this version to deck</button>
+        <label class="qty-label" id="viewer-qty-wrap" hidden>Qty <input type="number" id="viewer-qty" class="qty-input" min="1" max="99" value="1" aria-label="How many copies to add"></label>
         <button type="button" id="viewer-commander" class="secondary" hidden>👑 Set as commander</button>
       </div>
     </div>
