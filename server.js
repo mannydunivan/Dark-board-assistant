@@ -18,7 +18,7 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
 const SPELLBOOK = 'https://backend.commanderspellbook.com';
-const VERSION = '2.9';
+const VERSION = '2.10';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -170,7 +170,7 @@ async function scryfallFetch(url, retries) {
   let res;
   try {
     res = await fetch(url, {
-      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.9 (fan project)' },
+      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.10 (fan project)' },
     });
   } catch (e) {
     if (retries > 0) {
@@ -409,7 +409,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.9 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.10 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -518,7 +518,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.9 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.10 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
@@ -606,7 +606,7 @@ async function spellbookCombos(names) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'TheDarkBoardAssistant/2.9 (fan project)',
+        'User-Agent': 'TheDarkBoardAssistant/2.10 (fan project)',
       },
       body: JSON.stringify({
         main: names.map((n) => ({ card: n, quantity: 1 })),
@@ -684,6 +684,41 @@ app.post('/api/combos', comboLimiter, async (req, res) => {
       return res.status(429).json({ error: 'Combo lookup is busy right now. Try again in a moment.' });
     }
     res.status(502).json({ error: 'Combo lookup is unavailable right now.', fallback: true });
+  }
+});
+
+// ---- card rules text for the quiet-synergy scan (v2.10) ----
+// POST /api/cardtexts {cards:[names]} -> {texts:[{name, oracle_text, type_line}]}
+// The combo checker reads the deck's actual card text (not just names) to
+// find low-key synergies. Batched Scryfall collection lookup, 1h cache.
+const textCache = new Map();
+app.post('/api/cardtexts', comboLimiter, async (req, res) => {
+  const raw = req.body && req.body.cards;
+  if (!Array.isArray(raw) || !raw.length) {
+    return res.status(400).json({ error: 'Send an array of card names as "cards".' });
+  }
+  const names = [...new Set(raw.map((n) => String(n).trim()).filter(Boolean))].slice(0, 200);
+  if (!names.length) return res.status(400).json({ error: 'No valid card names.' });
+  const key = 'texts:' + comboKey(names);
+  const hit = textCache.get(key);
+  if (hit && Date.now() - hit.t < COMBO_TTL_MS) return res.json(hit.data);
+  try {
+    const data = await scryfallPost(SCRYFALL + '/cards/collection', {
+      identifiers: names.map((n) => ({ name: n })),
+    });
+    const out = {
+      texts: (data.data || []).map((c) => {
+        const faces = c.card_faces || [];
+        const texts = [c.oracle_text].concat(faces.map((f) => f.oracle_text)).filter(Boolean);
+        const types = [c.type_line].concat(faces.map((f) => f.type_line)).filter(Boolean);
+        return { name: c.name, oracle_text: texts.join('\n'), type_line: types.join(' // ') };
+      }),
+    };
+    textCache.set(key, { t: Date.now(), data: out });
+    if (textCache.size > 200) textCache.delete(textCache.keys().next().value);
+    res.json(out);
+  } catch (e) {
+    res.status(502).json({ error: 'Card text lookup is unavailable right now.' });
   }
 });
 
