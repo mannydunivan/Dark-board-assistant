@@ -179,6 +179,7 @@ body.soft-dark .card img, body.soft-dark #viewer-img { filter: brightness(.82) s
 .deck-list img { width: 44px; border-radius: 4px; }
 .deck-list .name { flex: 1; }
 .deck-list .name small { display: block; color: var(--text-dim); }
+.deck-list .abilities { display: block; font-size: .82rem; color: var(--text-dim); margin-top: .3rem; line-height: 1.35; }
 .deck-list li.checked .name { text-decoration: line-through; color: var(--text-dim); }
 .deck-list .qty { font-weight: bold; min-width: 2.5rem; text-align: center; }
 .deck-list .remove { background: none; border: none; color: var(--bad); font-size: 1.3rem; cursor: pointer; }
