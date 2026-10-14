@@ -18,7 +18,7 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
 const SPELLBOOK = 'https://backend.commanderspellbook.com';
-const VERSION = '2.12';
+const VERSION = '2.13';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -170,7 +170,7 @@ async function scryfallFetch(url, retries) {
   let res;
   try {
     res = await fetch(url, {
-      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.12 (fan project)' },
+      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.13 (fan project)' },
     });
   } catch (e) {
     if (retries > 0) {
@@ -409,7 +409,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.12 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.13 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -518,7 +518,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.12 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.13 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
@@ -606,7 +606,7 @@ async function spellbookCombos(names) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'TheDarkBoardAssistant/2.12 (fan project)',
+        'User-Agent': 'TheDarkBoardAssistant/2.13 (fan project)',
       },
       body: JSON.stringify({
         main: names.map((n) => ({ card: n, quantity: 1 })),
@@ -719,6 +719,114 @@ app.post('/api/cardtexts', comboLimiter, async (req, res) => {
     res.json(out);
   } catch (e) {
     res.status(502).json({ error: 'Card text lookup is unavailable right now.' });
+  }
+});
+
+// ---- deck generator pool (v2.13) ----
+// POST /api/gen-pool {format, maxPrice, creatureType, effect, speed}
+// Returns a commander (commander format) plus candidate cards matching the
+// user's theme, with rules text so the client can score combos/synergies and
+// build the deck. Real basic lands (with images) are included for mana bases.
+function slimCard(c) {
+  const faces = c.card_faces || [];
+  const f0 = faces[0] || {};
+  const img = (c.image_uris && (c.image_uris.normal || c.image_uris.small)) ||
+    (f0.image_uris && (f0.image_uris.normal || f0.image_uris.small)) || '';
+  return {
+    id: c.id, name: c.name,
+    oracle_text: c.oracle_text || f0.oracle_text || '',
+    type_line: c.type_line || f0.type_line || '',
+    cmc: typeof c.cmc === 'number' ? c.cmc : (typeof f0.cmc === 'number' ? f0.cmc : 0),
+    colors: c.colors || f0.colors || [],
+    color_identity: c.color_identity || f0.color_identity || [],
+    usd: c.prices ? c.prices.usd || null : null,
+    set: (c.set || '').toUpperCase(), cn: c.collector_number || '',
+    image: img,
+    edhrec: typeof c.edhrec_rank === 'number' ? c.edhrec_rank : 999999,
+    power: c.power != null ? String(c.power) : (f0.power != null ? String(f0.power) : null),
+    toughness: c.toughness != null ? String(c.toughness) : (f0.toughness != null ? String(f0.toughness) : null),
+  };
+}
+async function scryfallSearchAll(url, maxPages) {
+  let out = [], next = url, pages = 0;
+  while (next && pages < maxPages) {
+    const data = await scryfallFetch(next);
+    out = out.concat(data.data || []);
+    next = data.has_more ? data.next_page : null;
+    pages++;
+  }
+  return out;
+}
+app.post('/api/gen-pool', comboLimiter, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const format = ['commander', 'standard', 'modern'].includes(b.format) ? b.format : 'commander';
+    const priceCap = Math.max(0, parseFloat(b.maxPrice) || 0) || Infinity;
+    const creatureType = String(b.creatureType || '').trim().replace(/["\\]/g, '');
+    const effect = String(b.effect || '').trim().replace(/["\\]/g, '');
+    const speed = ['fast', 'balanced', 'slow'].includes(b.speed) ? b.speed : 'balanced';
+    const legal = format;
+    const cmcQ = speed === 'fast' ? ' cmc<=3' : (speed === 'balanced' ? ' cmc<=6' : '');
+    const affordable = (c) => {
+      const usd = c.prices && parseFloat(c.prices.usd);
+      return !(usd > priceCap);
+    };
+    // 1. Commander (commander format only), with fallbacks.
+    let commander = null, colors = [];
+    if (format === 'commander') {
+      const tries = [];
+      if (creatureType && effect) tries.push('is:commander legal:commander t:' + creatureType + ' o:"' + effect + '"');
+      if (creatureType) tries.push('is:commander legal:commander t:' + creatureType);
+      if (effect) tries.push('is:commander legal:commander o:"' + effect + '"');
+      tries.push('is:commander legal:commander');
+      for (const q of tries) {
+        const list = await scryfallSearchAll(
+          SCRYFALL + '/cards/search?q=' + encodeURIComponent(q) + '&order=edhrec&unique=cards', 1);
+        const pick = list.find(affordable);
+        if (pick) {
+          commander = slimCard(pick);
+          colors = commander.color_identity.slice();
+          break;
+        }
+      }
+      if (!commander) return res.status(404).json({ error: 'No commander found for those filters.' });
+    }
+    // 2. Candidate pool matching the theme.
+    const clauses = [];
+    if (creatureType) clauses.push('t:' + creatureType);
+    if (effect) clauses.push('o:"' + effect + '"');
+    let q = 'legal:' + legal + cmcQ;
+    if (clauses.length) q += ' (' + clauses.join(' OR ') + ')';
+    const raw = await scryfallSearchAll(
+      SCRYFALL + '/cards/search?q=' + encodeURIComponent(q) + '&order=edhrec&unique=cards', 2);
+    const seen = {};
+    const candidates = [];
+    for (const c of raw) {
+      const s = slimCard(c);
+      const k = s.name.toLowerCase();
+      if (seen[k]) continue;
+      seen[k] = true;
+      if (commander && k === commander.name.toLowerCase()) continue;
+      if (/Basic Land/.test(s.type_line)) continue;
+      if (format === 'commander' && !s.color_identity.every((col) => colors.includes(col))) continue;
+      if (!affordable(c)) continue;
+      candidates.push(s);
+      if (candidates.length >= 175) break;
+    }
+    // 3. Real basic lands for the mana base.
+    const basics = {};
+    try {
+      const basicsRaw = await scryfallSearchAll(
+        SCRYFALL + '/cards/search?q=' + encodeURIComponent('t:basic t:land legal:' + legal) + '&unique=cards', 1);
+      const want = { Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G', Wastes: 'C' };
+      for (const c of basicsRaw) {
+        const nm = c.name;
+        if (want[nm] && !basics[want[nm]]) basics[want[nm]] = slimCard(c);
+      }
+    } catch (e) { /* mana base falls back to text-only lands */ }
+    res.json({ commander: commander, colors: colors, candidates: candidates, basics: basics });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: 'Deck generation is unavailable right now.' });
   }
 });
 

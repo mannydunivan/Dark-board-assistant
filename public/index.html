@@ -29,6 +29,7 @@
     <button type="button" class="tab" data-tab="ideas" aria-pressed="false">Deck ideas</button>
     <button type="button" class="tab" data-tab="access" aria-pressed="false">Easy access</button>
     <button type="button" class="tab" data-tab="account" aria-pressed="false">Account</button>
+    <button type="button" class="tab" data-tab="gen" aria-pressed="false">Deck generator</button>
   </nav>
 </header>
 
@@ -296,6 +297,52 @@
         <button type="button" id="acct-logout" class="secondary">Log out</button>
       </div>
     </div>
+  </section>
+
+  <section id="tab-gen" class="panel" hidden aria-label="Deck generator">
+    <h2>Deck generator</h2>
+    <p class="muted">Tell me what you want, and I'll build a deck around it — combos included.</p>
+    <div class="field">
+      <label for="gen-name">Deck name</label>
+      <input id="gen-name" type="text" value="Generated deck" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <fieldset class="field">
+      <legend>Format</legend>
+      <label class="check"><input type="radio" name="gen-format" value="commander" checked> Commander</label>
+      <label class="check"><input type="radio" name="gen-format" value="standard"> Standard</label>
+      <label class="check"><input type="radio" name="gen-format" value="modern"> Modern</label>
+    </fieldset>
+    <div class="field">
+      <label for="gen-price">Max price per card ($)</label>
+      <input id="gen-price" type="number" min="0" step="0.5" value="5" inputmode="decimal">
+    </div>
+    <div class="field">
+      <label for="gen-type">Creature type</label>
+      <input id="gen-type" type="text" placeholder="Dragon" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="gen-effect">Effect or wording you're looking for</label>
+      <input id="gen-effect" type="text" placeholder='e.g. draw a card, treasure, sacrifice' autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    </div>
+    <fieldset class="field">
+      <legend>How fast should it play?</legend>
+      <label class="check"><input type="radio" name="gen-speed" value="fast"> Fast</label>
+      <label class="check"><input type="radio" name="gen-speed" value="balanced" checked> Balanced</label>
+      <label class="check"><input type="radio" name="gen-speed" value="slow"> Slow</label>
+    </fieldset>
+    <fieldset class="field">
+      <legend>Card types to build with</legend>
+      <label class="check"><input type="checkbox" name="gen-ctype" value="Creature" checked> Creatures</label>
+      <label class="check"><input type="checkbox" name="gen-ctype" value="Instant" checked> Instants</label>
+      <label class="check"><input type="checkbox" name="gen-ctype" value="Sorcery" checked> Sorceries</label>
+      <label class="check"><input type="checkbox" name="gen-ctype" value="Artifact" checked> Artifacts</label>
+      <label class="check"><input type="checkbox" name="gen-ctype" value="Enchantment" checked> Enchantments</label>
+      <label class="check"><input type="checkbox" name="gen-ctype" value="Planeswalker" checked> Planeswalkers</label>
+    </fieldset>
+    <div class="share-row">
+      <button type="button" id="gen-go" class="primary big">Generate deck</button>
+    </div>
+    <div id="gen-out" aria-live="polite"></div>
   </section>
 
   <footer class="disclaimer">
