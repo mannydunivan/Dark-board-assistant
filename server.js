@@ -18,7 +18,7 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
 const SPELLBOOK = 'https://backend.commanderspellbook.com';
-const VERSION = '2.14';
+const VERSION = '2.15';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -170,7 +170,7 @@ async function scryfallFetch(url, retries) {
   let res;
   try {
     res = await fetch(url, {
-      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.14 (fan project)' },
+      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.15 (fan project)' },
     });
   } catch (e) {
     if (retries > 0) {
@@ -409,7 +409,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.14 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.15 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -518,7 +518,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.14 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.15 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
@@ -606,7 +606,7 @@ async function spellbookCombos(names) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'TheDarkBoardAssistant/2.14 (fan project)',
+        'User-Agent': 'TheDarkBoardAssistant/2.15 (fan project)',
       },
       body: JSON.stringify({
         main: names.map((n) => ({ card: n, quantity: 1 })),
@@ -773,23 +773,51 @@ app.post('/api/gen-pool', comboLimiter, async (req, res) => {
     };
     // 1. Commander (commander format only), with fallbacks.
     let commander = null, colors = [];
+    const commanderName = String(b.commanderName || '').trim().slice(0, 80);
     if (format === 'commander') {
-      const tries = [];
-      if (creatureType && effect) tries.push('is:commander legal:commander t:' + creatureType + ' o:"' + effect + '"');
-      if (creatureType) tries.push('is:commander legal:commander t:' + creatureType);
-      if (effect) tries.push('is:commander legal:commander o:"' + effect + '"');
-      tries.push('is:commander legal:commander');
-      for (const q of tries) {
-        const list = await scryfallSearchAll(
-          SCRYFALL + '/cards/search?q=' + encodeURIComponent(q) + '&order=edhrec&unique=cards', 1);
-        const pick = list.find(affordable);
-        if (pick) {
-          commander = slimCard(pick);
-          colors = commander.color_identity.slice();
-          break;
+      if (commanderName) {
+        // The user named their commander: look it up exactly (fuzzy match
+        // forgives typos) and verify it can legally lead a Commander deck.
+        let named = null;
+        try {
+          named = await scryfallFetch(SCRYFALL + '/cards/named?fuzzy=' + encodeURIComponent(commanderName));
+        } catch (e) {
+          if (e && e.status === 404) {
+            return res.status(404).json({ error: 'Could not find a legendary creature named "' + commanderName + '". Check the spelling.' });
+          }
+          throw e;
         }
+        const tl = String(named.type_line || '');
+        const canLead = /legendary/i.test(tl) && (/creature/i.test(tl) || /can be your commander/i.test(String(named.oracle_text || '')));
+        if (!named || !canLead) {
+          return res.status(404).json({ error: 'Could not find a legendary creature named "' + commanderName + '". Check the spelling.' });
+        }
+        if (!affordable(named)) {
+          const usd = named.prices && named.prices.usd;
+          return res.status(400).json({ error: named.name + ' costs $' + usd + ', over your $' + (b.maxPrice || 0) + ' max per card.' });
+        }
+        commander = slimCard(named);
+        colors = commander.color_identity.slice();
       }
-      if (!commander) return res.status(404).json({ error: 'No commander found for those filters.' });
+      if (!commander) {
+        // No named commander: auto-pick one matching the theme, with fallbacks.
+        const tries = [];
+        if (creatureType && effect) tries.push('is:commander legal:commander t:' + creatureType + ' o:"' + effect + '"');
+        if (creatureType) tries.push('is:commander legal:commander t:' + creatureType);
+        if (effect) tries.push('is:commander legal:commander o:"' + effect + '"');
+        tries.push('is:commander legal:commander');
+        for (const q of tries) {
+          const list = await scryfallSearchAll(
+            SCRYFALL + '/cards/search?q=' + encodeURIComponent(q) + '&order=edhrec&unique=cards', 1);
+          const pick = list.find(affordable);
+          if (pick) {
+            commander = slimCard(pick);
+            colors = commander.color_identity.slice();
+            break;
+          }
+        }
+        if (!commander) return res.status(404).json({ error: 'No commander found for those filters.' });
+      }
     }
     // 2. Candidate pool matching the theme.
     const clauses = [];
