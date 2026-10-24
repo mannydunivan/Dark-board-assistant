@@ -18,7 +18,7 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
 const SPELLBOOK = 'https://backend.commanderspellbook.com';
-const VERSION = '2.16';
+const VERSION = '2.17';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -170,7 +170,7 @@ async function scryfallFetch(url, retries) {
   let res;
   try {
     res = await fetch(url, {
-      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.16 (fan project)' },
+      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.17 (fan project)' },
     });
   } catch (e) {
     if (retries > 0) {
@@ -409,7 +409,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.16 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.17 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -518,7 +518,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.16 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.17 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
@@ -606,7 +606,7 @@ async function spellbookCombos(names) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'TheDarkBoardAssistant/2.16 (fan project)',
+        'User-Agent': 'TheDarkBoardAssistant/2.17 (fan project)',
       },
       body: JSON.stringify({
         main: names.map((n) => ({ card: n, quantity: 1 })),
@@ -765,11 +765,15 @@ app.post('/api/gen-pool', comboLimiter, async (req, res) => {
     const creatureType = String(b.creatureType || '').trim().replace(/["\\]/g, '');
     const effect = String(b.effect || '').trim().replace(/["\\]/g, '');
     const speed = ['fast', 'balanced', 'slow'].includes(b.speed) ? b.speed : 'balanced';
-    // Preferred colors (v2.16): the generated deck uses only these colors.
+    // Preferred colors (v2.17): the generated deck uses only these colors.
     // A named commander overrides them — the name is the stronger signal.
     const prefColors = Array.isArray(b.colors)
       ? [...new Set(b.colors.map((c) => String(c).toUpperCase()))].filter((c) => ['W', 'U', 'B', 'R', 'G'].includes(c))
       : [];
+    // Commanders to skip in the auto-pick (v2.17): the "Different commander"
+    // button sends the ones already shown so each swap deals a fresh one.
+    const excludeNames = (Array.isArray(b.excludeCommanders) ? b.excludeCommanders : [b.excludeCommander])
+      .map((s) => String(s || '').trim().toLowerCase().slice(0, 80)).filter(Boolean);
     const legal = format;
     const cmcQ = speed === 'fast' ? ' cmc<=3' : (speed === 'balanced' ? ' cmc<=6' : '');
     const affordable = (c) => {
@@ -822,7 +826,7 @@ app.post('/api/gen-pool', comboLimiter, async (req, res) => {
           for (const q of themed) {
             const list = await scryfallSearchAll(
               SCRYFALL + '/cards/search?q=' + encodeURIComponent(q) + '&order=edhrec&unique=cards', 1);
-            const pick = list.find((c) => affordable(c) && (!pass || pass(c)));
+            const pick = list.find((c) => affordable(c) && (!pass || pass(c)) && !excludeNames.includes(String(c.name || '').toLowerCase()));
             if (pick) {
               commander = slimCard(pick);
               colors = commander.color_identity.slice();

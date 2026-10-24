@@ -2833,6 +2833,8 @@ $('#rank-decks').addEventListener('click', runRankings);
 // effect/wording, speed, and card types. Candidates come from /api/gen-pool;
 // the combo/synergy engine scores them so cards that work together get picked.
 let genPreview = null;
+let genLastRequest = null;
+let genExcluded = [];
 function dtoToCard(dto) {
   return {
     id: dto.id, name: dto.name, set: dto.set, collector_number: dto.cn,
@@ -2873,6 +2875,8 @@ async function generateDeck() {
     box.innerHTML = '<p class="muted">Pick at least one card type.</p>';
     return;
   }
+  genExcluded = [];
+  genLastRequest = { format: format, maxPrice: maxPrice, maxTotal: maxTotal, creatureType: creatureType, effect: effect, speed: speed, commanderName: commanderName, colors: prefColors, cardTypes: cardTypes, name: name };
   box.innerHTML = '<p class="muted" role="status">Generating your deck… this takes a few seconds.</p>';
   announce('Generating deck.');
   try {
@@ -2991,10 +2995,38 @@ function renderGenPreview() {
   });
   html += '</ul>';
   if (b.picks.length > 24) html += '<p class="muted small">…and ' + (b.picks.length - 24) + ' more.</p>';
-  html += '<div class="share-row"><button type="button" id="gen-add" class="primary">Add to my decks</button></div>';
+  html += '<div class="share-row">';
+  if (b.commanderName) html += '<button type="button" id="gen-swap">↻ Different commander</button>';
+  html += '<button type="button" id="gen-add" class="primary">Add to my decks</button></div>';
   box.innerHTML = html;
   $('#gen-add').addEventListener('click', addGeneratedToDecks);
+  const swapBtn = $('#gen-swap');
+  if (swapBtn) swapBtn.addEventListener('click', swapCommander);
   announce('Deck generated: ' + b.totalCards + ' cards.');
+}
+// "Different commander" (v2.17): re-roll the auto-pick with the commanders
+// already shown excluded, and rebuild the deck around the new one. Every
+// filter from the original generation (theme, price, colors) is kept.
+async function swapCommander() {
+  if (!genPreview || !genLastRequest || !genPreview.built.commanderName) return;
+  const req = genLastRequest;
+  genExcluded.push(genPreview.built.commanderName);
+  const box = $('#gen-out');
+  box.innerHTML = '<p class="muted" role="status">Finding a different commander…</p>';
+  announce('Finding a different commander.');
+  try {
+    const r = await api('/api/gen-pool', { method: 'POST', body: JSON.stringify({ format: req.format, maxPrice: req.maxPrice, creatureType: req.creatureType, effect: req.effect, speed: req.speed, commanderName: '', colors: req.colors, excludeCommanders: genExcluded }) });
+    if (!r.ok) throw new Error((r.data && r.data.error) || 'generation failed');
+    const built = buildGeneratedDeck(r.data, { format: req.format, cardTypes: req.cardTypes, maxTotal: req.maxTotal });
+    if (!built.picks.length) {
+      box.innerHTML = '<p class="muted">Not enough cards matched for a different commander. Try loosening the filters.</p>';
+      return;
+    }
+    genPreview = { built: built, name: req.name, format: req.format };
+    renderGenPreview();
+  } catch (e) {
+    box.innerHTML = '<p class="muted">No other commander matches those filters. Try loosening them — or raise the max price per card — and generate again.</p>';
+  }
 }
 async function addGeneratedToDecks() {
   if (!genPreview) return;
