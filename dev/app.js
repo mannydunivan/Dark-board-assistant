@@ -471,7 +471,7 @@ function buildQuery() {
   if (name) parts.push(name);
   if (type) parts.push('t:"' + type.toLowerCase() + '"');
   if (ability) parts.push('o:"' + ability.toLowerCase() + '"');
-  if (colors) parts.push('c>=' + colors);
+  if (colors) parts.push('id>=' + colors);
   const set = clean($('#q-set').value);
   if (set) parts.push('s:' + set.toLowerCase());
   const cn = clean($('#q-cn').value);
@@ -480,6 +480,63 @@ function buildQuery() {
   if (!isNaN(maxp)) parts.push('usd<=' + maxp);
   parts.push('f:' + searchFormat);
   return parts.join(' ') || 'f:' + searchFormat;
+}
+
+// Stronger name search (v2.18): when the full-filter search finds nothing
+// for a typed name, walk a fallback ladder instead of giving up —
+// 1) the name alone (filters may have hidden a real card),
+// 2) a fuzzy named lookup (forgives typos and punctuation),
+// 3) "Did you mean…?" suggestions the user can tap.
+async function searchFallback(name) {
+  try {
+    const p = new URLSearchParams({ q: name + ' f:' + searchFormat, order: 'name', dir: 'auto', page: '1' });
+    if ($('#q-prints').checked) p.set('unique', 'prints');
+    const r = await fetch('/api/search?' + p.toString());
+    const d = await r.json();
+    if (!d.error && (d.total_cards || 0) > 0) {
+      renderCards(d.data || []);
+      searchPage = 1; hasMore = false;
+      $('#pager').hidden = true;
+      const n = d.total_cards;
+      $('#results-info').textContent = 'No matches with all those filters on — showing ' + n + ' match' + (n === 1 ? '' : 'es') + ' for the name alone.';
+      $('#results-info').setAttribute('aria-hidden', 'false');
+      announce(n + ' matches for the name alone.');
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  try {
+    const r = await fetch('/api/named?fuzzy=' + encodeURIComponent(name));
+    const card = await r.json();
+    const legal = card && card.legalities && card.legalities[searchFormat];
+    if (card && card.name && !card.error && legal !== 'not_legal') {
+      renderCards([card]);
+      searchPage = 1; hasMore = false;
+      $('#pager').hidden = true;
+      $('#results-info').textContent = 'Closest match: ' + card.name + '.';
+      $('#results-info').setAttribute('aria-hidden', 'false');
+      announce('Closest match: ' + card.name + '.');
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  try {
+    const r = await fetch('/api/autocomplete?q=' + encodeURIComponent(name));
+    const d = await r.json();
+    const sugg = (d.data || []).filter((s) => s.toLowerCase() !== name.toLowerCase()).slice(0, 6);
+    if (sugg.length) {
+      let html = '<p class="muted">No card matched that name. Did you mean…?</p><div class="share-row">';
+      sugg.forEach((s) => { html += '<button type="button" class="sugg-btn" data-sugg="' + esc(s) + '">' + esc(s) + '</button>'; });
+      html += '</div>';
+      $('#results').innerHTML = html;
+      searchPage = 1; hasMore = false;
+      $('#pager').hidden = true;
+      $('#results-info').textContent = 'No matches. Suggestions below.';
+      $('#results-info').setAttribute('aria-hidden', 'false');
+      $$('#results .sugg-btn').forEach((b) => b.addEventListener('click', () => { $('#q-name').value = b.dataset.sugg; activeCustom = null; runSearch(1); }));
+      announce('No matches. Did you mean suggestions shown.');
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  return false;
 }
 
 async function runSearch(page, custom) {
@@ -493,6 +550,10 @@ async function runSearch(page, custom) {
     const res = await fetch('/api/search?' + params.toString());
     const data = await res.json();
     if (data.error) { announce(data.error); $('#results-info').textContent = data.error; $('#results').innerHTML = ''; return; }
+    if (!custom && page === 1 && (data.total_cards || 0) === 0) {
+      const typedName = clean($('#q-name').value);
+      if (typedName && await searchFallback(typedName)) return;
+    }
     renderCards(data.data || []);
     searchPage = page;
     hasMore = !!data.has_more;

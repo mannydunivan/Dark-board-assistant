@@ -18,7 +18,7 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
 const SPELLBOOK = 'https://backend.commanderspellbook.com';
-const VERSION = '2.17';
+const VERSION = '2.18';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -170,7 +170,7 @@ async function scryfallFetch(url, retries) {
   let res;
   try {
     res = await fetch(url, {
-      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.17 (fan project)' },
+      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.18 (fan project)' },
     });
   } catch (e) {
     if (retries > 0) {
@@ -382,7 +382,18 @@ app.delete('/api/decks/:id', requireAuth, async (req, res) => {
 });
 
 // ---- card data (unchanged from v1.x) ----
-app.get('/api/search', scryfallProxy('/cards/search'));
+app.get('/api/search', async (req, res) => {
+  try {
+    const qs = new URLSearchParams(req.query).toString();
+    const data = await scryfallFetch(SCRYFALL + '/cards/search' + (qs ? '?' + qs : ''));
+    res.json(data);
+  } catch (e) {
+    // "No matches" is an answer, not an outage (v2.18): return an empty list
+    // so the app can say so plainly and try its fallbacks.
+    if (e.status === 404) return res.json({ object: 'list', total_cards: 0, has_more: false, data: [] });
+    res.status(e.status || 502).json({ error: 'Card data is unavailable right now. Please try again in a moment.' });
+  }
+});
 app.get('/api/autocomplete', scryfallProxy('/cards/autocomplete'));
 app.get('/api/named', scryfallProxy('/cards/named'));
 app.get('/api/sets', scryfallProxy('/sets'));
@@ -409,7 +420,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.17 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.18 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -518,7 +529,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.17 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.18 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
@@ -606,7 +617,7 @@ async function spellbookCombos(names) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'TheDarkBoardAssistant/2.17 (fan project)',
+        'User-Agent': 'TheDarkBoardAssistant/2.18 (fan project)',
       },
       body: JSON.stringify({
         main: names.map((n) => ({ card: n, quantity: 1 })),
@@ -765,12 +776,12 @@ app.post('/api/gen-pool', comboLimiter, async (req, res) => {
     const creatureType = String(b.creatureType || '').trim().replace(/["\\]/g, '');
     const effect = String(b.effect || '').trim().replace(/["\\]/g, '');
     const speed = ['fast', 'balanced', 'slow'].includes(b.speed) ? b.speed : 'balanced';
-    // Preferred colors (v2.17): the generated deck uses only these colors.
+    // Preferred colors (v2.18): the generated deck uses only these colors.
     // A named commander overrides them — the name is the stronger signal.
     const prefColors = Array.isArray(b.colors)
       ? [...new Set(b.colors.map((c) => String(c).toUpperCase()))].filter((c) => ['W', 'U', 'B', 'R', 'G'].includes(c))
       : [];
-    // Commanders to skip in the auto-pick (v2.17): the "Different commander"
+    // Commanders to skip in the auto-pick (v2.18): the "Different commander"
     // button sends the ones already shown so each swap deals a fresh one.
     const excludeNames = (Array.isArray(b.excludeCommanders) ? b.excludeCommanders : [b.excludeCommander])
       .map((s) => String(s || '').trim().toLowerCase().slice(0, 80)).filter(Boolean);
