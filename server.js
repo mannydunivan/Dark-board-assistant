@@ -18,7 +18,7 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
 const SPELLBOOK = 'https://backend.commanderspellbook.com';
-const VERSION = '2.15';
+const VERSION = '2.16';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -170,7 +170,7 @@ async function scryfallFetch(url, retries) {
   let res;
   try {
     res = await fetch(url, {
-      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.15 (fan project)' },
+      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.16 (fan project)' },
     });
   } catch (e) {
     if (retries > 0) {
@@ -409,7 +409,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.15 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.16 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -518,7 +518,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.15 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.16 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
@@ -606,7 +606,7 @@ async function spellbookCombos(names) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'TheDarkBoardAssistant/2.15 (fan project)',
+        'User-Agent': 'TheDarkBoardAssistant/2.16 (fan project)',
       },
       body: JSON.stringify({
         main: names.map((n) => ({ card: n, quantity: 1 })),
@@ -765,6 +765,11 @@ app.post('/api/gen-pool', comboLimiter, async (req, res) => {
     const creatureType = String(b.creatureType || '').trim().replace(/["\\]/g, '');
     const effect = String(b.effect || '').trim().replace(/["\\]/g, '');
     const speed = ['fast', 'balanced', 'slow'].includes(b.speed) ? b.speed : 'balanced';
+    // Preferred colors (v2.16): the generated deck uses only these colors.
+    // A named commander overrides them — the name is the stronger signal.
+    const prefColors = Array.isArray(b.colors)
+      ? [...new Set(b.colors.map((c) => String(c).toUpperCase()))].filter((c) => ['W', 'U', 'B', 'R', 'G'].includes(c))
+      : [];
     const legal = format;
     const cmcQ = speed === 'fast' ? ' cmc<=3' : (speed === 'balanced' ? ' cmc<=6' : '');
     const affordable = (c) => {
@@ -801,29 +806,42 @@ app.post('/api/gen-pool', comboLimiter, async (req, res) => {
       }
       if (!commander) {
         // No named commander: auto-pick one matching the theme, with fallbacks.
-        const tries = [];
-        if (creatureType && effect) tries.push('is:commander legal:commander t:' + creatureType + ' o:"' + effect + '"');
-        if (creatureType) tries.push('is:commander legal:commander t:' + creatureType);
-        if (effect) tries.push('is:commander legal:commander o:"' + effect + '"');
-        tries.push('is:commander legal:commander');
-        for (const q of tries) {
-          const list = await scryfallSearchAll(
-            SCRYFALL + '/cards/search?q=' + encodeURIComponent(q) + '&order=edhrec&unique=cards', 1);
-          const pick = list.find(affordable);
-          if (pick) {
-            commander = slimCard(pick);
-            colors = commander.color_identity.slice();
-            break;
+        // With preferred colors, exact-identity matches win first, then
+        // commanders whose identity fits inside the preferred colors.
+        const themed = [];
+        if (creatureType && effect) themed.push('is:commander legal:commander t:' + creatureType + ' o:"' + effect + '"');
+        if (creatureType) themed.push('is:commander legal:commander t:' + creatureType);
+        if (effect) themed.push('is:commander legal:commander o:"' + effect + '"');
+        themed.push('is:commander legal:commander');
+        const idOf = (c) => (c.color_identity || []).slice().sort().join('');
+        const wantId = prefColors.slice().sort().join('');
+        const idPasses = prefColors.length
+          ? [(c) => idOf(c) === wantId, (c) => (c.color_identity || []).every((col) => prefColors.includes(col)), null]
+          : [null];
+        outer: for (const pass of idPasses) {
+          for (const q of themed) {
+            const list = await scryfallSearchAll(
+              SCRYFALL + '/cards/search?q=' + encodeURIComponent(q) + '&order=edhrec&unique=cards', 1);
+            const pick = list.find((c) => affordable(c) && (!pass || pass(c)));
+            if (pick) {
+              commander = slimCard(pick);
+              colors = commander.color_identity.slice();
+              break outer;
+            }
           }
         }
         if (!commander) return res.status(404).json({ error: 'No commander found for those filters.' });
       }
     }
+    if (format !== 'commander') colors = prefColors.slice();
     // 2. Candidate pool matching the theme.
+    // Color limit: the commander's identity, or the preferred colors.
+    const limitColors = format === 'commander' ? colors : prefColors;
     const clauses = [];
     if (creatureType) clauses.push('t:' + creatureType);
     if (effect) clauses.push('o:"' + effect + '"');
     let q = 'legal:' + legal + cmcQ;
+    if (limitColors.length) q += ' id<=' + limitColors.join('').toLowerCase();
     if (clauses.length) q += ' (' + clauses.join(' OR ') + ')';
     const raw = await scryfallSearchAll(
       SCRYFALL + '/cards/search?q=' + encodeURIComponent(q) + '&order=edhrec&unique=cards', 2);
@@ -836,7 +854,8 @@ app.post('/api/gen-pool', comboLimiter, async (req, res) => {
       seen[k] = true;
       if (commander && k === commander.name.toLowerCase()) continue;
       if (/Basic Land/.test(s.type_line)) continue;
-      if (format === 'commander' && !s.color_identity.every((col) => colors.includes(col))) continue;
+      const hasLimit = format === 'commander' || prefColors.length > 0;
+      if (hasLimit && !s.color_identity.every((col) => limitColors.includes(col))) continue;
       if (!affordable(c)) continue;
       candidates.push(s);
       if (candidates.length >= 175) break;
