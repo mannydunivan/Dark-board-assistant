@@ -3050,9 +3050,19 @@ function renderGenPreview() {
       : ' · under your $' + b.budgetCap + ' budget';
   }
   html += '<p class="muted small">About ' + esc(b.priceLine) + ' total' + budgetNote + ' · ' + b.comboCount + ' combos and synergies woven in</p>';
-  html += '<ul class="stat-list">';
+  // v2.19: each generated card shows its ability and wording to the right
+  // of the card name, so you can read what a card does before adding it.
+  // The gen-pool data already carries oracle_text and type_line for every
+  // card, so this needs no extra lookup. Cards with no rules text (plain
+  // vanilla creatures) show their type line on the right instead.
+  html += '<ul class="gen-list">';
   b.picks.slice(0, 24).forEach((p) => {
-    html += '<li>' + esc(p.dto.name) + (p.qty > 1 ? ' ×' + p.qty : '') + (p.asCommander ? ' 👑' : '') + '</li>';
+    const d = p.dto;
+    const wording = ((d.oracle_text || '').trim()) || (d.type_line || '');
+    const price = d.usd ? ' · $' + parseFloat(d.usd).toFixed(2) : '';
+    html += '<li><span class="gen-card">' + esc(d.name) + (p.qty > 1 ? ' ×' + p.qty : '') + (p.asCommander ? ' 👑' : '') +
+      '<small>' + esc(d.type_line || '') + price + '</small></span>' +
+      '<span class="gen-text">' + esc(wording).replace(/\n/g, '<br>') + '</span></li>';
   });
   html += '</ul>';
   if (b.picks.length > 24) html += '<p class="muted small">…and ' + (b.picks.length - 24) + ' more.</p>';

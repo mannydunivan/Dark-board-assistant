@@ -18,7 +18,7 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
 const SPELLBOOK = 'https://backend.commanderspellbook.com';
-const VERSION = '2.18';
+const VERSION = '2.19';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -170,7 +170,7 @@ async function scryfallFetch(url, retries) {
   let res;
   try {
     res = await fetch(url, {
-      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.18 (fan project)' },
+      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.19 (fan project)' },
     });
   } catch (e) {
     if (retries > 0) {
@@ -420,7 +420,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.18 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.19 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -529,7 +529,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.18 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.19 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
@@ -617,7 +617,7 @@ async function spellbookCombos(names) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'TheDarkBoardAssistant/2.18 (fan project)',
+        'User-Agent': 'TheDarkBoardAssistant/2.19 (fan project)',
       },
       body: JSON.stringify({
         main: names.map((n) => ({ card: n, quantity: 1 })),

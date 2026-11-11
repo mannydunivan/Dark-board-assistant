@@ -303,6 +303,18 @@ body:not(.easy-view) .easy-only { display: none; }
 .standout-title { font-weight: bold; margin: .6rem 0 .2rem; }
 .stat-list { list-style: none; padding: 0; margin: .2rem 0; }
 .stat-list li { margin: .2rem 0; }
+
+/* ---------- deck generator preview (v2.19) ---------- */
+/* Card name on the left, ability and wording on the right. */
+.gen-list { list-style: none; padding: 0; margin: .2rem 0; }
+.gen-list li {
+  display: flex; gap: .8rem; align-items: flex-start;
+  background: var(--surface); border: 2px solid var(--border);
+  border-radius: var(--radius); padding: .5rem .8rem; margin-bottom: .5rem;
+}
+.gen-list .gen-card { flex: 0 1 40%; min-width: 0; font-weight: bold; }
+.gen-list .gen-card small { display: block; font-weight: normal; color: var(--text-dim); font-size: .82rem; }
+.gen-list .gen-text { flex: 1 1 60%; min-width: 0; font-size: .85rem; color: var(--text-dim); line-height: 1.35; }
 .tips-list { margin: .4rem 0; padding-left: 1.2rem; }
 .tips-list li { margin: .3rem 0; }
 .legend-dot { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-right: .25em; vertical-align: baseline; }
