@@ -2896,6 +2896,7 @@ $('#rank-decks').addEventListener('click', runRankings);
 let genPreview = null;
 let genLastRequest = null;
 let genExcluded = [];
+let genShowAll = false;
 function dtoToCard(dto) {
   return {
     id: dto.id, name: dto.name, set: dto.set, collector_number: dto.cn,
@@ -2954,6 +2955,7 @@ async function generateDeck() {
       return;
     }
     genPreview = { built: built, name: name, format: format };
+    genShowAll = false;
     renderGenPreview();
   } catch (e) {
     box.innerHTML = '<p class="muted">Deck generation is unavailable right now. Please try again in a moment.</p>';
@@ -3061,7 +3063,10 @@ function renderGenPreview() {
   // card, so this needs no extra lookup. Cards with no rules text (plain
   // vanilla creatures) show their type line on the right instead.
   html += '<ul class="gen-list">';
-  b.picks.slice(0, 24).forEach((p) => {
+  // v2.21: the preview starts at the first 24 cards; "Show all N more"
+  // expands the list to the whole deck. It used to be plain text, so
+  // tapping it did nothing.
+  (genShowAll ? b.picks : b.picks.slice(0, 24)).forEach((p) => {
     const d = p.dto;
     const wording = ((d.oracle_text || '').trim()) || (d.type_line || '');
     const price = d.usd ? ' · $' + parseFloat(d.usd).toFixed(2) : '';
@@ -3070,12 +3075,14 @@ function renderGenPreview() {
       '<span class="gen-text">' + esc(wording).replace(/\n/g, '<br>') + '</span></li>';
   });
   html += '</ul>';
-  if (b.picks.length > 24) html += '<p class="muted small">…and ' + (b.picks.length - 24) + ' more.</p>';
+  if (!genShowAll && b.picks.length > 24) html += '<button type="button" id="gen-more" class="secondary">Show all ' + (b.picks.length - 24) + ' more</button>';
   html += '<div class="share-row">';
   if (b.commanderName) html += '<button type="button" id="gen-swap">↻ Different commander</button>';
   html += '<button type="button" id="gen-add" class="primary">Add to my decks</button></div>';
   box.innerHTML = html;
   $('#gen-add').addEventListener('click', addGeneratedToDecks);
+  const moreBtn = $('#gen-more');
+  if (moreBtn) moreBtn.addEventListener('click', () => { genShowAll = true; renderGenPreview(); });
   const swapBtn = $('#gen-swap');
   if (swapBtn) swapBtn.addEventListener('click', swapCommander);
   announce('Deck generated: ' + b.totalCards + ' cards.');
@@ -3099,6 +3106,7 @@ async function swapCommander() {
       return;
     }
     genPreview = { built: built, name: req.name, format: req.format };
+    genShowAll = false;
     renderGenPreview();
   } catch (e) {
     box.innerHTML = '<p class="muted">No other commander matches those filters. Try loosening them — or raise the max price per card — and generate again.</p>';
