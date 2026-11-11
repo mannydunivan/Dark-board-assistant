@@ -3506,6 +3506,15 @@ async function initAccount() {
   try {
     const s = await api('/api/status');
     accountsOn = !!(s.data && s.data.accounts);
+    // v2.22: the header badge reads the real version from the server,
+    // so it can never go stale again (it used to be hardcoded v2.9).
+    if (s.data && s.data.version) {
+      const badge = document.querySelector('.version-badge');
+      if (badge) {
+        badge.textContent = 'v' + s.data.version;
+        badge.setAttribute('aria-label', 'Version ' + s.data.version);
+      }
+    }
   } catch (e) { accountsOn = false; }
   updateAccountUI();
   if (!accountsOn) return;
