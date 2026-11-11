@@ -18,7 +18,7 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = process.env.PORT || 3000;
 const SCRYFALL = 'https://api.scryfall.com';
 const SPELLBOOK = 'https://backend.commanderspellbook.com';
-const VERSION = '2.19';
+const VERSION = '2.20';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || '';
@@ -170,7 +170,7 @@ async function scryfallFetch(url, retries) {
   let res;
   try {
     res = await fetch(url, {
-      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.19 (fan project)' },
+      headers: { 'User-Agent': 'TheDarkBoardAssistant/2.20 (fan project)' },
     });
   } catch (e) {
     if (retries > 0) {
@@ -420,7 +420,7 @@ async function scryfallPost(url, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'TheDarkBoardAssistant/2.19 (fan project)',
+      'User-Agent': 'TheDarkBoardAssistant/2.20 (fan project)',
     },
     body: JSON.stringify(body),
   });
@@ -529,7 +529,7 @@ function slugify(name) {
 }
 async function edhrecFetch(url) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.19 (fan project)' },
+    headers: { 'User-Agent': 'TheDarkBoardAssistant/2.20 (fan project)' },
   });
   if (!res.ok) {
     const err = new Error('EDHREC returned ' + res.status);
@@ -617,7 +617,7 @@ async function spellbookCombos(names) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'TheDarkBoardAssistant/2.19 (fan project)',
+        'User-Agent': 'TheDarkBoardAssistant/2.20 (fan project)',
       },
       body: JSON.stringify({
         main: names.map((n) => ({ card: n, quantity: 1 })),
@@ -812,10 +812,12 @@ app.post('/api/gen-pool', comboLimiter, async (req, res) => {
         if (!named || !canLead) {
           return res.status(404).json({ error: 'Could not find a legendary creature named "' + commanderName + '". Check the spelling.' });
         }
-        if (!affordable(named)) {
-          const usd = named.prices && named.prices.usd;
-          return res.status(400).json({ error: named.name + ' costs $' + usd + ', over your $' + (b.maxPrice || 0) + ' max per card.' });
-        }
+        // v2.20: a commander the user names by name is their explicit pick,
+        // so the max-price-per-card cap does not block it (Maralen of the
+        // Mornsong is $31 and the default cap is $5, which used to refuse
+        // the whole deck). The cap still limits every other card, the
+        // total-deck budget never cuts the commander, and the preview shows
+        // the full total so the cost stays visible.
         commander = slimCard(named);
         colors = commander.color_identity.slice();
       }

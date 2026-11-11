@@ -2942,7 +2942,12 @@ async function generateDeck() {
   announce('Generating deck.');
   try {
     const r = await api('/api/gen-pool', { method: 'POST', body: JSON.stringify({ format: format, maxPrice: maxPrice, creatureType: creatureType, effect: effect, speed: speed, commanderName: commanderName, colors: prefColors }) });
-    if (!r.ok) throw new Error((r.data && r.data.error) || 'generation failed');
+    // v2.20: show the server's real reason when generation is refused
+    // (e.g. a card name that can't be found) instead of a generic message.
+    if (!r.ok) {
+      box.innerHTML = '<p class="muted">' + esc((r.data && r.data.error) || 'Deck generation is unavailable right now. Please try again in a moment.') + '</p>';
+      return;
+    }
     const built = buildGeneratedDeck(r.data, { format: format, cardTypes: cardTypes, maxTotal: maxTotal });
     if (!built.picks.length) {
       box.innerHTML = '<p class="muted">Not enough cards matched. Try raising the price or loosening the filters.</p>';
